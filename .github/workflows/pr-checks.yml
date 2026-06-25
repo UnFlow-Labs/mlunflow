@@ -1,0 +1,53 @@
+name: PR checks
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  push:
+    branches:
+      - main
+  workflow_run:
+    workflows: ["Dependabot auto-approve & auto-merge"]   # name of the workflow that pushes commits
+    types:
+      - completed
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-${{ github.event_name }}-${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_branch || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Static analysis
+    if: ${{ !(github.event_name == 'pull_request' && github.event.pull_request.user.login == 'dependabot[bot]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_branch || github.ref }}
+
+      - name: Static analysis
+        uses: ./.github/actions/static-analysis
+        with:
+          token-gen-app-id: ${{ secrets.ARC_GITHUB_CI_TOKEN_GEN_APP_ID }}
+          token-gen-private-key: ${{ secrets.ARC_GITHUB_CI_TOKEN_GEN_KEY }}
+
+  tests:
+    name: Pytest
+    if: ${{ !(github.event_name == 'pull_request' && github.event.pull_request.user.login == 'dependabot[bot]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_branch || github.ref }}
+          lfs: true
+
+      - name: Run tests
+        uses: ./.github/actions/tests
+        with:
+          token-gen-app-id: ${{ secrets.ARC_GITHUB_CI_TOKEN_GEN_APP_ID }}
+          token-gen-private-key: ${{ secrets.ARC_GITHUB_CI_TOKEN_GEN_KEY }}

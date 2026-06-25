@@ -1,0 +1,71 @@
+name: static-analysis
+description: static-analysis
+inputs:
+  token-gen-app-id:
+    description: App ID for token generation
+    required: true
+  token-gen-private-key:
+    description: Private Key for token generation
+    required: true
+runs:
+  using: 'composite'
+  steps:
+    - name: "Set up Python"
+      uses: actions/setup-python@v5
+      with:
+        python-version-file: ".python-version"
+
+    - name: Install uv (with cache)
+      uses: astral-sh/setup-uv@v6
+      with:
+        enable-cache: true
+        # Invalidate cache when dependencies or lockfile change
+        cache-dependency-glob: |
+          **/pyproject.toml
+          **/uv.lock
+
+    - name: Generate token for dependency access
+      id: app-token
+      uses: actions/create-github-app-token@v1
+      with:
+        app-id: ${{ inputs.token-gen-app-id }}
+        private-key: ${{ inputs.token-gen-private-key }}
+        owner: ${{ github.repository_owner }}
+
+    - name: Sync dependencies (dev)
+      shell: bash
+      run: |
+        git config --global url."https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/".insteadOf "git@github.com:"
+        git config --global url."https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/".insteadOf "https://github.com/"
+        uv sync --frozen
+
+    # ---- Ruff (formatter + linter)
+    - name: Ruff format check
+      shell: bash
+      run: uv run ruff format --check .
+    - name: Ruff lint
+      shell: bash
+      run: uv run ruff check --output-format=github .
+      # GitHub-friendly annotations from Ruff's GA docs
+      # https://docs.astral.sh/ruff/integrations/
+      # (no extra step needed; output-format=github adds inline annotations)
+
+    # ---- mypy cache (restore)
+    - name: Restore mypy cache
+      id: mypy-cache-restore
+      uses: actions/cache/restore@v4
+      with:
+        path: .mypy_cache
+        key: mypy-${{ runner.os }}-${{ hashFiles('pyproject.toml', 'uv.lock') }}
+
+    - name: Run static analysis
+      shell: bash
+      run: uv run inv static-analysis
+
+    # ---- mypy cache (save even if later steps fail)
+    - name: Save mypy cache
+      if: always()
+      uses: actions/cache/save@v4
+      with:
+        path: .mypy_cache
+        key: ${{ steps.mypy-cache-restore.outputs.cache-primary-key || format('mypy-{0}-{1}', runner.os, hashFiles('pyproject.toml', 'uv.lock')) }}

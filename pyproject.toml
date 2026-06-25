@@ -1,0 +1,104 @@
+[project]
+name = "unflow"
+description = "Abstraction of experiements in ML"
+readme = "README.md"
+authors = [
+    { name = "hnomair", email = "hazem.nomair@cambridge.org" }
+]
+requires-python = ">=3.14,<4.0"
+dependencies = [
+    "typer>=0.17.3",
+]
+version = "0.0.0"
+
+[dependency-groups]
+dev = [
+    "bandit[toml]>=1.8.6",
+    "coverage>=7.10.6",
+    "deptry>=0.23.1",
+    "invoke>=2.2.0",
+    "mypy>=1.17.1",
+    "pytest>=8.4.1",
+    "pytest-cov>=6.2.1",
+    "ruff>=0.12.10",
+    "typeguard>=4.4.4",
+    "vulture>=2.14",
+]
+
+[project.scripts]
+unflow = "unflow.main:app"
+
+[build-system]
+requires = ["uv_build>=0.8.12,<0.9.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "unflow"
+module-root = ""
+
+[tool.pytest.ini_options]
+empty_parameter_set_mark = "fail_at_collect"
+typeguard-packages = "unflow"
+testpaths = ["tests"]
+norecursedirs = "tests/fixtures"
+
+[tool.coverage.run]
+branch = true
+source = ["unflow"]
+
+[tool.coverage.report]
+show_missing = true
+skip_empty = true
+fail_under = 80
+
+[tool.deptry]
+extend_exclude = ["tasks\\.py"]
+
+[tool.mypy]
+ignore_missing_imports = true
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+
+[tool.ruff.lint]
+# Start with a curated baseline instead of ALL.
+# E,F: pycodestyle/pyflakes (core correctness)
+# I: import sorting
+# UP: pyupgrade (modernize syntax)
+# B: bugbear (bug-prone patterns)
+# S: bandit (security) -- keep; relax in tests as needed
+# PT: pytest rules
+# NPY, PD: numpy/pandas best practices (great for ML code)
+# C4: comprehensions (readability)
+# SIM: code simplifications
+# RUF: ruff-specific rules (includes useful fixes)
+# PERF: perf-oriented suggestions
+select = [
+    "E", "F", "I", "UP", "B", "S", "PT",
+    "NPY", "PD", "C4", "SIM", "RUF", "PERF",
+]
+ignore = [
+    "E721"
+]
+
+[tool.ruff.lint.per-file-ignores]
+"**/__init__.py" = ["F401"]  # ignore unused imports in __init__.py files
+"tests/**" = [
+    "NPY002", # numpy-legacy-random (NPY002)
+    "PT006", # pytest-parametrize-names-wrong-type (PT006)
+    "S101", # assert (S101)
+    "S603", # subprocess-without-shell-equals-true (S603)
+    "S105", # hardcoded-password-string (S105)
+    "S202", # tarfile-unsafe-members (S202)
+]
+"tasks.py" = [
+    "PT028", # pytest-parameter-with-default-argument (PT028)
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
