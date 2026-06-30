@@ -37,15 +37,17 @@ def get_args_changes(args1: dict, args2: dict) -> dict[str, tuple[Any, Any]]:
                     if change_type == "values_changed":
                         changes[key] = (value["old_value"], value["new_value"])
                     elif change_type == "type_changes":
-                        changes[key] = (value["old_type"], value["new_type"])
+                        changes[key] = (str(value["old_type"]), str(value["new_type"]))
                     elif change_type == "dictionary_item_added":
                         changes[key] = (None, value)
                     elif change_type == "dictionary_item_removed":
                         changes[key] = (value, None)
             if isinstance(diff[change_type], OrderedSet):
                 for item in diff[change_type]:
-                    print(item)
-                    changes[item] = (None, None)  # Placeholder for added/removed items
+                    if change_type == "dictionary_item_added":
+                        changes[item] = (None, value)
+                    elif change_type == "dictionary_item_removed":
+                        changes[item] = (value, None)
     return changes
 
 

@@ -67,7 +67,7 @@ class RState:
             outputs = self.procedure()
         else:
             outputs = self.procedure(self.args)
-        # self.completed = True
+        self.completed = True
         return outputs, self.completed
 
     def serialize(self):
