@@ -11,7 +11,6 @@ def _worker(task):
     func_name, params = task
 
     func = REGISTRY[func_name]
-    engine = ExecutionEngine()
 
     return engine.run(func, **params)
 
@@ -28,6 +27,7 @@ class unflowdecorator:
             return engine.run(func, *args, **kwargs)
 
         wrapper.run_in_parallel = lambda combos: self.parallel(func, combos)
+        wrapper.clear_graph = lambda: self._clear_graph(func)
         return wrapper
     
     def parallel(self, func, combinations):
@@ -45,6 +45,9 @@ class unflowdecorator:
 
         with Pool() as pool:
             return pool.map(_worker, tasks)
+    def _clear_graph(self, func):
+        g_name = func.__name__
+        engine.db.clear_graph(g_name)
 
    
         

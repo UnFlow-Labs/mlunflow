@@ -75,3 +75,6 @@ class ComputeGraph:
             print(f"Running state: {state.name}")
             outputs = state.run()
             print(f"Outputs: {outputs}")
+    def clear(self):
+        self.graph.clear()
+        self.state_map.clear()

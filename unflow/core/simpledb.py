@@ -23,6 +23,10 @@ class DB:
         cursor.execute(SELECT_QUERY, (name,))
         row = cursor.fetchone()
         return row[0] if row else None
+    
+    def clear_graph(self, name: str):
+        with self.conn:
+            self.conn.execute("DELETE FROM graphs WHERE name = ?", (name,))
 
     def close(self):
         self.conn.close()

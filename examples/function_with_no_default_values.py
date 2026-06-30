@@ -1,5 +1,7 @@
 from unflow.core.unflow_core import engine
-from unflow.core.unflow_core import unflowdecorator
+from unflow.core.unflow_core import unflowdecorator, engine
+
+
 
 @unflowdecorator()
 def train_2(lr, epochs=10, optimizer="adam", batch_size=32, model="resnet", dataset="cifar10"):
@@ -13,5 +15,6 @@ if __name__ == "__main__":
         {"lr": 0.05, "epochs": 15, "optimizer": "rmsprop", "batch_size": 128, "model": "mobilenet", "dataset": "cifar100"},
     
     ]
-    train_2(**combinations[2])
+    train_2.clear_graph()
+    train_2(**combinations[1])
     print(f"Graph edges after running the procedure: {engine.graph.graph.edges(data=True)}")
