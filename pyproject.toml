@@ -5,7 +5,7 @@ readme = "README.md"
 authors = [
     { name = "hnomair", email = "hazem.nomair@cambridge.org" }
 ]
-requires-python = ">=3.14,<4.0"
+requires-python = ">=3.11,<3.14.1"
 dependencies = [
     "typer>=0.17.3",
      "networkx>=3.6.1",
