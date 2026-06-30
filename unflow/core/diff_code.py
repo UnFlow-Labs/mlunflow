@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING, Any
 
 import deepdiff
 from orderly_set import OrderedSet
+from unflow.core.json_encoder import dumps 
 
 if TYPE_CHECKING:
     pass
@@ -28,7 +29,9 @@ def diff_procedure(source1: str, source2: str) -> bool:
 
 
 def get_args_changes(args1: dict, args2: dict) -> dict[str, tuple[Any, Any]]:
-    diff = deepdiff.DeepDiff(args1, args2, ignore_order=True)
+    json_args1 = dumps(args1)
+    json_args2 = dumps(args2)
+    diff = deepdiff.DeepDiff(json_args1, json_args2, ignore_order=True)
     changes = {}
     for change_type in ["values_changed", "type_changes", "dictionary_item_added", "dictionary_item_removed"]:
         if change_type in diff:
@@ -37,7 +40,7 @@ def get_args_changes(args1: dict, args2: dict) -> dict[str, tuple[Any, Any]]:
                     if change_type == "values_changed":
                         changes[key] = (value["old_value"], value["new_value"])
                     elif change_type == "type_changes":
-                        changes[key] = (str(value["old_type"]), str(value["new_type"]))
+                        changes[key] = (value["old_type"], value["new_type"])
                     elif change_type == "dictionary_item_added":
                         changes[key] = (None, value)
                     elif change_type == "dictionary_item_removed":

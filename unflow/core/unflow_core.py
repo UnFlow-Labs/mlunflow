@@ -1,10 +1,11 @@
-import json
+import orjson
 
 import networkx as nx
 from networkx.readwrite import json_graph
 
 from unflow.core.simpledb import DB
 from unflow.core.unflow_types import Procedure, RState, Transformation
+from unflow.core.json_encoder import dumps
 
 
 class ComputeGraph:
@@ -41,12 +42,12 @@ class ComputeGraph:
         for edge in data["edges"]:
             transformation = self.graph.edges[edge["source"], edge["target"]]["transformation"]
             edge["transformation"] = transformation.__dict__()
-        return json.dumps(data, indent=4)
+        return dumps(data)
 
     def json2graph(self, json_object):
         from unflow.core.unflow_core import RState
 
-        json_object = json.loads(json_object)
+        json_object = orjson.loads(json_object)
         self.graph = json_graph.node_link_graph(json_object)
         self.state_map = {}
         for node, data in self.graph.nodes(data=True):
@@ -79,26 +80,29 @@ class ComputeGraph:
             print(f"Outputs: {outputs}")
 
 
-# connect to the database
-db = DB()
-c_graph = ComputeGraph()  # current command graph
+
 
 
 class unflowdecorator:
     def __init__(self, procedure: Procedure):
         self.procedure = procedure
+        self.db = DB()  # connect to the database
+        self.graph = ComputeGraph()  # current command graph
+    
+    def get_graph(self):
+        return self.graph
 
     def __call__(self, *args, **kwargs):
         # every time the decorated function is called, we create a new state and detect the transformation
         # first load the graph from the database if it exists
         g_name = self.procedure.__name__
-        graph_data = db.load_graph(g_name)
+        graph_data = self.db.load_graph(g_name)
 
         if graph_data:
-            c_graph.json2graph(graph_data)
-        existing_states = [data["state"] for _, data in c_graph.graph.nodes(data=True)]
+            self.graph.json2graph(graph_data)
+        existing_states = [data["state"] for _, data in self.graph.graph.nodes(data=True)]
         # create a new state for this procedure call
-        new_state_name = f"{g_name}_{len(c_graph.graph.nodes)}"
+        new_state_name = f"{g_name}_{len(self.graph.graph.nodes)}"
         state_args = kwargs if kwargs else args
         new_state = RState(
             name=new_state_name,
@@ -109,7 +113,7 @@ class unflowdecorator:
         # detect transformations from existing states to the new state
         first_time_execution = False
         if len(existing_states) == 0:
-            c_graph.add_state(new_state)
+            self.graph.add_state(new_state)
             first_time_execution = True
         transformations = []
         for prev_state in existing_states:
@@ -126,12 +130,13 @@ class unflowdecorator:
                 transformations = []
                 break
         if transformations:
-            c_graph.add_state(new_state)
+            self.graph.add_state(new_state)
             for t in transformations:
-                c_graph.add_transformation(t.state1, t.state2, t)
+                self.graph.add_transformation(t.state1, t.state2, t)
         if first_time_execution or transformations:
-            outs = c_graph.run(new_state)
+            outs = self.graph.run(new_state)
             # save the updated graph to the database
-            data = c_graph.graph2json()
-            db.save_graph(g_name, graph_data=data)  # Save the graph to the database
+            data = self.graph.graph2json()
+            self.db.save_graph(g_name, graph_data=data)  # Save the graph to the database
+            self.db.close()  # Close the database connection
             return outs
