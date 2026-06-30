@@ -1,4 +1,3 @@
-from argparse import Namespace
 import inspect
 import os
 from collections.abc import Callable
