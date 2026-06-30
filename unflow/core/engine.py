@@ -1,4 +1,8 @@
 
+
+
+import inspect
+
 from unflow.core.simpledb import DB
 from unflow.graph.compute_graph import ComputeGraph
 from unflow.core.unflow_types import RState, Transformation
@@ -7,12 +11,19 @@ class ExecutionEngine:
     def __init__(self):
         self.db = DB()
         self.graph = ComputeGraph()
+    
+    def normalize(self, func, args, kwargs):
+        sig = inspect.signature(func)
+        bound = sig.bind(*args, **kwargs)
+        bound.apply_defaults()
+        return dict(bound.arguments)
 
     def run(self, func, *args, **kwargs):
         return self._execute(func, *args, **kwargs)
 
     def _execute(self, func, *args, **kwargs):
         g_name = func.__name__
+        params = self.normalize(func, args, kwargs)
 
         graph_data = self.db.load_graph(g_name)
         if graph_data:
@@ -26,8 +37,9 @@ class ExecutionEngine:
         new_state = RState(
             name=f"{g_name}_{len(existing_states)}",
             procedure=func,
-            args=args,
-            description=kwargs.get("description", ""),
+            args=params,
+            kwargs={},
+            description="auto",
         )
 
       

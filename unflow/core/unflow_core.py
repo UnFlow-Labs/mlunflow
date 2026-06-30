@@ -2,15 +2,20 @@ from functools import wraps
 from unflow.core.engine import ExecutionEngine
 from multiprocessing import Pool
 from unflow.core.unflow_types import RState, Transformation
-
+import inspect
 
 REGISTRY : dict = {}
 engine = ExecutionEngine()
 
 def _worker(task):
-    func_name, args = task
+    func_name, params = task
+
     func = REGISTRY[func_name]
-    return engine.run(func, args)
+    engine = ExecutionEngine()
+
+    return engine.run(func, **params)
+
+
 
 
 class unflowdecorator:
@@ -26,11 +31,20 @@ class unflowdecorator:
         return wrapper
     
     def parallel(self, func, combinations):
+        sig = inspect.signature(func)
+
+        normalized = [
+            dict(sig.bind(**c).arguments)
+            for c in combinations
+        ]
+
+        tasks = [
+            (func.__name__, params)
+            for params in normalized
+        ]
+
         with Pool() as pool:
-            return pool.map(
-                _worker,
-                [(func.__name__, kwargs) for kwargs in combinations]
-            )
+            return pool.map(_worker, tasks)
 
    
         

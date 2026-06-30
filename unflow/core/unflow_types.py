@@ -45,7 +45,7 @@ def load_procedure(path: Path) -> Procedure:
 
 class RState:
     def __init__(
-        self, name: str, procedure: Procedure, args: dict | None, procedure_source: str = "", description: str = ""
+        self, name: str, procedure: Procedure, args: dict | None, kwargs: dict | None = None, procedure_source: str = "", description: str = ""
     ):
         self.name = name
         self.procedure = procedure
@@ -59,14 +59,8 @@ class RState:
         if self.completed:
             print(f"State {self.name} has already been executed. Skipping execution.")
             return None
-        if isinstance(self.args, dict):
-            outputs = self.procedure(**self.args)
-        elif isinstance(self.args, (tuple, list)):
-            outputs = self.procedure(*self.args)
-        elif self.args is None:
-            outputs = self.procedure()
-        else:
-            outputs = self.procedure(self.args)
+        # Execute the procedure with the provided arguments and keyword arguments
+        outputs = self.procedure(**self.args)
         self.completed = True
         return outputs, self.completed
     
