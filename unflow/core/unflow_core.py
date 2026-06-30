@@ -4,7 +4,7 @@ import networkx as nx
 from networkx.readwrite import json_graph
 
 from unflow.core.simpledb import DB
-from unflow.core.unflow_types import Procedure, RState, Transformation, is_state_equal
+from unflow.core.unflow_types import Procedure, RState, Transformation
 
 
 class ComputeGraph:
@@ -21,9 +21,6 @@ class ComputeGraph:
 
     def get_state(self, name):
         return self.state_map.get(name, None)
-
-    def is_state_present(self, state: RState) -> bool:
-        return any(is_state_equal(existing_state, state) for existing_state in self.state_map.values())
 
     def get_states(self):
         return list(self.state_map.values())

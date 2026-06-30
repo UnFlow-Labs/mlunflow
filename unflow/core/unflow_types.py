@@ -43,15 +43,6 @@ def load_procedure(path: Path) -> Procedure:
         return cloudpickle.load(f)
 
 
-def is_state_equal(state1: RState, state2: RState) -> bool:
-    # Check if two states are equal based on their procedure and arguments
-    return (
-        state1.procedure == state2.procedure
-        and state1.args == state2.args
-        and state1.procedure_source == state2.procedure_source
-    )
-
-
 class RState:
     def __init__(
         self, name: str, procedure: Procedure, args: dict | None, procedure_source: str = "", description: str = ""
