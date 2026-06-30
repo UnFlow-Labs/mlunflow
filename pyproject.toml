@@ -8,6 +8,11 @@ authors = [
 requires-python = ">=3.14,<4.0"
 dependencies = [
     "typer>=0.17.3",
+     "networkx>=3.6.1",
+    "deepdiff>=9.1.0",
+    "cloudpickle>=3.1.2",
+    # only if you directly import it
+    "orderly_set>=5.5.0",
 ]
 version = "0.0.0"
 
