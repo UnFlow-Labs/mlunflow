@@ -95,3 +95,80 @@ class TestScheduler:
         target = single_graph.get_state("s1")
         _, graph = sched.run(target)
         assert graph is not None
+
+
+class TestSchedulerParallel:
+    """Tests for parallel execution support in the scheduler."""
+
+    def make_diamond_graph(self):
+        """
+        Creates a diamond DAG:
+            s1
+           /  \
+          s2  s3
+           \  /
+            s4
+        """
+        g = ComputeGraph()
+        s1 = make_state("s1")
+        s2 = make_state("s2")
+        s3 = make_state("s3")
+        s4 = make_state("s4")
+        g.add_state(s1)
+        g.add_state(s2)
+        g.add_state(s3)
+        g.add_state(s4)
+        g.add_transformation(s1, s2, MagicMock())
+        g.add_transformation(s1, s3, MagicMock())
+        g.add_transformation(s2, s4, MagicMock())
+        g.add_transformation(s3, s4, MagicMock())
+        return g
+
+    def test_run__diamond_all_completed(self):
+        g = self.make_diamond_graph()
+        sched = Scheduler(g, LocalExecutor())
+        target = g.get_state("s4")
+        record, _ = sched.run(target)
+        assert record.status == RStateStatus.COMPLETED
+        for name in ["s1", "s2", "s3", "s4"]:
+            assert sched.records[name].status == RStateStatus.COMPLETED
+
+    def test_run__diamond_partial_failure(self):
+        """If one branch fails, the dependent node should not run."""
+        g = self.make_diamond_graph()
+        sched = Scheduler(g, LocalExecutor())
+        target = g.get_state("s4")
+
+        # Mark s3 as failed
+        s3 = g.get_state("s3")
+        s3.status = RStateStatus.FAILED
+        sched.records["s3"].status = RStateStatus.FAILED
+
+        record, _ = sched.run(target)
+        # s4's predecessor s3 failed, so s4 never runs
+        assert sched.records["s4"].status == RStateStatus.PENDING
+
+    def test_run__two_independent_chains(self):
+        """Two independent chains: s1->s2 and s3->s4. Only the target's chain runs."""
+        g = ComputeGraph()
+        s1 = make_state("s1")
+        s2 = make_state("s2")
+        s3 = make_state("s3")
+        s4 = make_state("s4")
+        g.add_state(s1)
+        g.add_state(s2)
+        g.add_state(s3)
+        g.add_state(s4)
+        g.add_transformation(s1, s2, MagicMock())
+        g.add_transformation(s3, s4, MagicMock())
+
+        sched = Scheduler(g, LocalExecutor())
+
+        # Run s2 — only s1 and s2 should execute
+        record, _ = sched.run(g.get_state("s2"))
+        assert record.status == RStateStatus.COMPLETED
+        assert sched.records["s1"].status == RStateStatus.COMPLETED
+        assert sched.records["s2"].status == RStateStatus.COMPLETED
+        # s3 and s4 should still be PENDING (not in required subgraph)
+        assert sched.records["s3"].status == RStateStatus.PENDING
+        assert sched.records["s4"].status == RStateStatus.PENDING

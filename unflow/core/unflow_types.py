@@ -81,7 +81,7 @@ class RState:
         outputs = self.procedure(**self.args)
         self.status = RStateStatus.COMPLETED
         return outputs, self.status
-
+    
     def serialize(self):
         name = f".{self.procedure.__name__}_{self.name}"
         os.makedirs(PICKLE_PATH / name, exist_ok=True)
