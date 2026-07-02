@@ -1,9 +1,9 @@
 import difflib
+from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any
 
 import deepdiff
 from orderly_set import OrderedSet
-from unflow.core.json_encoder import dumps 
 
 if TYPE_CHECKING:
     pass
@@ -29,9 +29,7 @@ def diff_procedure(source1: str, source2: str) -> bool:
 
 
 def get_args_changes(args1: dict, args2: dict) -> dict[str, tuple[Any, Any]]:
-    json_args1 = dumps(args1)
-    json_args2 = dumps(args2)
-    diff = deepdiff.DeepDiff(json_args1, json_args2, ignore_order=True)
+    diff = deepdiff.DeepDiff(args1, args2, ignore_order=True)
     changes = {}
     for change_type in ["values_changed", "type_changes", "dictionary_item_added", "dictionary_item_removed"]:
         if change_type in diff:
@@ -45,12 +43,12 @@ def get_args_changes(args1: dict, args2: dict) -> dict[str, tuple[Any, Any]]:
                         changes[key] = (None, value)
                     elif change_type == "dictionary_item_removed":
                         changes[key] = (value, None)
-            if isinstance(diff[change_type], OrderedSet):
+            elif isinstance(diff[change_type], (OrderedSet, Iterable)):
                 for item in diff[change_type]:
                     if change_type == "dictionary_item_added":
-                        changes[item] = (None, value)
+                        changes[item] = (None, "<added>")
                     elif change_type == "dictionary_item_removed":
-                        changes[item] = (value, None)
+                        changes[item] = ("<removed>", None)
     return changes
 
 

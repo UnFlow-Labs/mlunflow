@@ -1,7 +1,8 @@
-import orjson
 import datetime
 import decimal
-from dataclasses import is_dataclass, asdict
+from dataclasses import asdict, is_dataclass
+
+import orjson
 
 try:
     from pydantic import BaseModel

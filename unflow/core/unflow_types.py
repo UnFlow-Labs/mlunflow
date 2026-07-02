@@ -1,6 +1,7 @@
 import inspect
 import os
 from collections.abc import Callable
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +12,14 @@ from unflow.core.diff_code import get_args_changes, get_procedure_changes
 
 Procedure = Callable[..., Any]
 DummyProcedure = Callable[..., Any]
+
+
+class RStateStatus(Enum):
+    PENDING = "pending"
+    READY = "ready"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
 
 
 def save_procedure(procedure: Procedure, path: Path):
@@ -45,26 +54,33 @@ def load_procedure(path: Path) -> Procedure:
 
 class RState:
     def __init__(
-        self, name: str, procedure: Procedure, args: dict | None, kwargs: dict | None = None, procedure_source: str = "", description: str = ""
+        self,
+        name: str,
+        procedure: Procedure,
+        args: dict | None,
+        kwargs: dict | None = None,
+        procedure_source: str = "",
+        description: str = "",
     ):
         self.name = name
         self.procedure = procedure
         self.description = description
         self.args = args if args is not None else {}
-        self.completed = False
+        self.status = RStateStatus.PENDING
         if not procedure_source:
             self.procedure_source = inspect.getsource(procedure)
+        else:
+            self.procedure_source = procedure_source
 
     def run(self):
-        if self.completed:
+        if self.status == RStateStatus.COMPLETED:
             print(f"State {self.name} has already been executed. Skipping execution.")
             return None
         # Execute the procedure with the provided arguments and keyword arguments
+        self.status = RStateStatus.RUNNING
         outputs = self.procedure(**self.args)
-        self.completed = True
-        return outputs, self.completed
-    
-   
+        self.status = RStateStatus.COMPLETED
+        return outputs, self.status
 
     def serialize(self):
         name = f".{self.procedure.__name__}_{self.name}"
@@ -78,7 +94,7 @@ class RState:
             "procedure_source": str(path_proc.with_suffix(".py")),
             "args": self.args,
             "description": self.description,
-            "completed": self.completed,
+            "status": self.status.value,
         }
 
     @staticmethod
@@ -89,7 +105,7 @@ class RState:
         state.procedure_source = load_procedure_source(Path(data["procedure_source"]))
         state.args = data.get("args", {})
         state.description = data.get("description", "")
-        state.completed = data.get("completed", False)
+        state.status = RStateStatus(data.get("status", "pending"))
         return state
 
 

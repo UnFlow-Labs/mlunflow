@@ -1,9 +1,10 @@
-import orjson
-
 import networkx as nx
+import orjson
 from networkx.readwrite import json_graph
+
 from unflow.core.json_encoder import dumps
 from unflow.core.unflow_types import RState, Transformation
+
 
 class ComputeGraph:
     def __init__(self):
@@ -11,6 +12,7 @@ class ComputeGraph:
         self.state_map = {}
 
     def add_state(self, state: RState):
+        # does this state already exist? if so, we don't add it again
         self.graph.add_node(state.name, state=state)
         self.state_map[state.name] = state
 
@@ -42,7 +44,6 @@ class ComputeGraph:
         return dumps(data)
 
     def json2graph(self, json_object):
-        from unflow.core.unflow_core import RState
 
         json_object = orjson.loads(json_object)
         self.graph = json_graph.node_link_graph(json_object)
@@ -57,24 +58,6 @@ class ComputeGraph:
             transformation = Transformation.from_dict(data["transformation"], state1, state2)
             self.graph.edges[u, v_]["transformation"] = transformation
 
-    def run(self, target_state: RState):
-
-        # 1. get all ancestors needed for this state
-        ancestors = nx.ancestors(self.graph, target_state.name)
-        subgraph_nodes = ancestors | {target_state.name}
-
-        # 2. extract induced subgraph
-        subgraph = self.graph.subgraph(subgraph_nodes)
-
-        # 3. topological sort based on dependencies
-        ordered = list(nx.topological_sort(subgraph))
-        print(f"Execution order: {ordered}")
-        # 4. execute in correct order
-        for state_name in ordered:
-            state = self.graph.nodes[state_name]["state"]
-            print(f"Running state: {state.name}")
-            outputs = state.run()
-            print(f"Outputs: {outputs}")
     def clear(self):
         self.graph.clear()
         self.state_map.clear()
