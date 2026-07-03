@@ -26,7 +26,7 @@ class Scheduler:
 
     def _ready(self, node) -> bool:
         """Returns True if all dependencies completed."""
-        return all(self.records[pred].status == RStateStatus.COMPLETED  for pred in self.graph.predecessors(node))
+        return all(self.records[pred].status == RStateStatus.COMPLETED or self.records[pred].status == RStateStatus.RUNNING for pred in self.graph.predecessors(node))
 
     def run(self, target: RState):
 
