@@ -7,9 +7,10 @@ from unflow.core.unflow_types import RState, Transformation
 
 
 class ComputeGraph:
-    def __init__(self):
+    def __init__(self, execution_path: str):
         self.graph = nx.DiGraph()
-        self.state_map = {}
+        self.state_map: dict[str, RState] = {}
+        self.execution_path = execution_path  # Initialize execution_path
 
     def add_state(self, state: RState):
         # does this state already exist? if so, we don't add it again
@@ -19,8 +20,8 @@ class ComputeGraph:
     def add_transformation(self, from_state: RState, to_state: RState, transformation: Transformation):
         self.graph.add_edge(from_state.name, to_state.name, transformation=transformation)
 
-    def get_state(self, name):
-        return self.state_map.get(name, None)
+    def get_state(self, state_name):
+        return self.state_map.get(state_name, None)
 
     def get_states(self):
         return list(self.state_map.values())
@@ -51,7 +52,7 @@ class ComputeGraph:
         for node, data in self.graph.nodes(data=True):
             state = RState.from_dict(data["state"])
             self.graph.nodes[node]["state"] = state
-            self.state_map[node] = state
+            self.state_map[state.name] = state
         for u, v_, data in self.graph.edges(data=True):
             state1 = self.graph.nodes[u]["state"]
             state2 = self.graph.nodes[v_]["state"]

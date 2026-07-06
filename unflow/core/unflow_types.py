@@ -1,6 +1,7 @@
 import inspect
 import os
 from collections.abc import Callable
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -9,6 +10,7 @@ import cloudpickle
 
 from unflow.core.constants import PICKLE_PATH
 from unflow.core.diff_code import get_args_changes, get_procedure_changes
+from unflow.core.json_encoder import dumps
 
 Procedure = Callable[..., Any]
 DummyProcedure = Callable[..., Any]
@@ -81,7 +83,7 @@ class RState:
         outputs = self.procedure(**self.args)
         self.status = RStateStatus.COMPLETED
         return outputs, self.status
-    
+
     def serialize(self):
         name = f".{self.procedure.__name__}_{self.name}"
         os.makedirs(PICKLE_PATH / name, exist_ok=True)
@@ -145,3 +147,49 @@ class Transformation:
         transformation.p_changes = data.get("procedure_changes", {})
         transformation.args_changes = data.get("args_changes", {})
         return transformation
+
+
+class Outcome:
+    def __init__(self, state: RState, outputs: dict[str, Any] | None = None):
+        """
+        An outcome represents the result of executing a state.
+        :param state: The state that was executed.
+        :param outputs: The outputs produced by the state execution."""
+        self.state = state
+        self.outputs = outputs
+
+    def __dict__(self):
+        return {
+            "state": self.state.name,
+            "outputs": self.outputs,
+        }
+
+    @staticmethod
+    def from_dict(data: dict, state: RState):
+        outcome = Outcome.__new__(Outcome)
+        outcome.state = state
+        outcome.outputs = data.get("outputs")
+        return outcome
+
+    def to_json(self):
+        return dumps(self.__dict__())
+
+
+@dataclass
+class Job:
+    state: RState
+    output: object = None
+    error: Exception | None = None
+    completed: bool = False
+    start_time: float | None = None
+    end_time: float | None = None
+
+
+@dataclass
+class ExecutionRecord:
+    status: RStateStatus = RStateStatus.PENDING
+    outcome: Outcome | None = None
+    error: Exception | None = None
+    state_name: str | None = None
+    start_time: float | None = None
+    end_time: float | None = None

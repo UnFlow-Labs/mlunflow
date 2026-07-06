@@ -2,17 +2,9 @@ import datetime
 import decimal
 from dataclasses import asdict, is_dataclass
 
+import numpy as np
 import orjson
-
-try:
-    from pydantic import BaseModel
-except ImportError:
-    BaseModel = None
-
-try:
-    import numpy as np
-except ImportError:
-    np = None
+from pydantic import BaseModel
 
 
 class SerializationError(Exception):

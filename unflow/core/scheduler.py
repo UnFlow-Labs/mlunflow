@@ -1,20 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 import networkx as nx
 
 from unflow.core.executors.executor import Executor
-from unflow.core.executors.local_exectuor import Job
-from unflow.core.unflow_types import RState, RStateStatus
+from unflow.core.unflow_types import ExecutionRecord, Job, Outcome, RState, RStateStatus
 from unflow.graph.compute_graph import ComputeGraph
-
-
-@dataclass
-class ExecutionRecord:
-    status: RStateStatus = RStateStatus.PENDING
-    outputs: object = None
-    error: Exception | None = None
 
 
 class Scheduler:
@@ -22,11 +12,14 @@ class Scheduler:
         self.graph = graph.graph
         self.executor = executor
 
-        self.records = {node.name: ExecutionRecord(node.status) for node in graph.get_states()}
+        self.records = {node.name: ExecutionRecord(node.status, state_name=node.name) for node in graph.get_states()}
 
     def _ready(self, node) -> bool:
         """Returns True if all dependencies completed."""
-        return all(self.records[pred].status == RStateStatus.COMPLETED or self.records[pred].status == RStateStatus.RUNNING for pred in self.graph.predecessors(node))
+        return all(
+            self.records[pred].status == RStateStatus.COMPLETED or self.records[pred].status == RStateStatus.RUNNING
+            for pred in self.graph.predecessors(node)
+        )
 
     def run(self, target: RState):
 
@@ -57,7 +50,7 @@ class Scheduler:
         # ----------------------------------------
 
         for node in nx.topological_sort(subgraph):
-            if self.records[node].status == RStateStatus.COMPLETED:
+            if self.records[node].status == RStateStatus.COMPLETED or self.records[node].status == RStateStatus.FAILED:
                 continue
             if self._ready(node):
                 _submit(node)
@@ -70,7 +63,6 @@ class Scheduler:
         # ----------------------------------------
 
         while outstanding:
-
             job = self.executor.wait()
             if job is None:
                 break
@@ -86,16 +78,17 @@ class Scheduler:
                 self.graph.nodes[node_name]["state"].status = RStateStatus.FAILED
                 print(f"{node_name} failed: {job.error}")
             else:
-                record.outputs = job.output
                 record.status = RStateStatus.COMPLETED
                 self.graph.nodes[node_name]["state"].status = RStateStatus.COMPLETED
+            record.outcome = Outcome(self.graph.nodes[node_name]["state"], job.output)
+            record.start_time = job.start_time
+            record.end_time = job.end_time
 
             # ----------------------------------------
             # Check successors
             # ----------------------------------------
 
             for succ in self.graph.successors(node_name):
-
                 if succ not in required:
                     continue
 
@@ -103,5 +96,4 @@ class Scheduler:
 
                 if succ_record.status == RStateStatus.PENDING and self._ready(succ):
                     _submit(succ)
-
         return self.records[target.name], self.graph

@@ -1,7 +1,5 @@
 import time
 
-import pytest
-
 from unflow.core.executors.multiprocessing_executor import MultiprocessingExecutor
 from unflow.core.unflow_types import RState
 

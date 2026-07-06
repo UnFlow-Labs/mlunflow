@@ -3,7 +3,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from unflow.core.unflow_core import unflowdecorator
-from unflow.core.unflow_types import RStateStatus
+from unflow.core.unflow_types import ExecutionRecord, Outcome, RStateStatus
 
 
 def _train(lr=0.01, epochs=10):
@@ -39,13 +39,14 @@ class TestUnflowDecorator:
         deco, _ = decorator
         wrapped = deco(_train)
 
-        mock_state = MagicMock()
-        mock_state.status = RStateStatus.COMPLETED
-        mock_state.outputs = {"loss": 0.5}
+        mock_record = MagicMock()
+        mock_record.status = RStateStatus.COMPLETED
+        mock_record.outcome = Outcome(MagicMock(), {"loss": 0.5})
 
-        deco.run_once = MagicMock(return_value=mock_state)
+        deco.run_once = MagicMock(return_value=mock_record)
 
         result = wrapped(lr=0.01, epochs=10)
+        assert result is not None
         assert result == {"loss": 0.5}
 
     def test_call__duplicate_returns_none(self, decorator):
@@ -61,28 +62,41 @@ class TestUnflowDecorator:
         deco, _ = decorator
         wrapped = deco(_train)
 
-        mock_state = MagicMock()
-        mock_state.status = RStateStatus.FAILED
-        mock_state.outputs = None
+        mock_record = MagicMock()
+        mock_record.status = RStateStatus.FAILED
+        mock_record.outcome = None
 
-        deco.run_once = MagicMock(return_value=mock_state)
+        deco.run_once = MagicMock(return_value=mock_record)
 
         result = wrapped(lr=0.01, epochs=10)
         assert result is None
 
     def test_run_multiple(self, decorator):
-        deco, _ = decorator
-        deco.run_once = MagicMock(return_value="result")
+        deco, mock_gb = decorator
         wrapped = deco(_train)
 
-        combos = [
-            {"args": [], "kwargs": {"lr": 0.01}},
-            {"args": [], "kwargs": {"lr": 0.1}},
-        ]
-        results = wrapped.run_multiple(combos)
+        s1 = MagicMock(name="s1")
+        s1.name = "s1"
+        s2 = MagicMock(name="s2")
+        s2.name = "s2"
+        deco.build_graph = MagicMock(side_effect=[s1, s2])
+        mock_gb.compute_graph = MagicMock()
 
-        assert results == ["result", "result"]
-        assert deco.run_once.call_count == 2
+        record = ExecutionRecord(status=RStateStatus.COMPLETED)
+        with patch("unflow.core.unflow_core.Scheduler") as mock_sched_cls:
+            mock_sched = MagicMock()
+            mock_sched.run.return_value = (record, MagicMock())
+            mock_sched_cls.return_value = mock_sched
+
+            combos = [
+                {"args": [], "kwargs": {"lr": 0.01}},
+                {"args": [], "kwargs": {"lr": 0.1}},
+            ]
+            results = wrapped.run_multiple(combos)
+
+        assert results == [record]
+        assert deco.build_graph.call_count == 2
+        assert mock_gb.set_status.call_count == 2
 
     def test_clear_graph(self, decorator):
         deco, mock_gb = decorator
@@ -117,25 +131,36 @@ class TestRunOnce:
             yield deco, mock_gb, mock_sched, mock_sched_cls
 
     def test_run_once__loads_transforms_saves(self, deco):
-        deco, mock_gb, mock_sched, _ = deco
+        deco, mock_gb, mock_sched, mock_sched_cls = deco
         mock_state = MagicMock()
         mock_state.name = "s0"
-        mock_gb.transform.return_value = mock_state
-        mock_sched.run.return_value = (mock_state, MagicMock())
+        mock_record = MagicMock()
+        graph = MagicMock()
 
-        deco.run_once(_train, (), {"lr": 0.01})
+        mock_gb.create_state.return_value = mock_state
+        mock_gb.transform.return_value = True
+        mock_sched.run.return_value = (mock_record, graph)
+
+        result = deco.run_once(_train, (), {"lr": 0.01})
 
         mock_gb.load_graph.assert_called_once_with("_train")
-        mock_gb.transform.assert_called_once()
+        mock_gb.create_state.assert_called_once_with(_train, lr=0.01)
+        mock_gb.transform.assert_called_once_with(mock_state)
         mock_gb.save_graph.assert_called()
         mock_sched.run.assert_called_once_with(mock_state)
+        mock_sched_cls.assert_called_once_with(mock_gb.compute_graph, deco.executor)
+        mock_gb.finalize.assert_called_once_with(graph, mock_record, "_train", mock_state)
+        assert result == mock_record
 
     def test_run_once__transform_returns_none(self, deco):
-        deco, mock_gb, _, _ = deco
-        mock_gb.transform.return_value = None
+        deco, mock_gb, _, mock_sched_cls = deco
+        mock_state = MagicMock()
+        mock_gb.create_state.return_value = mock_state
+        mock_gb.transform.return_value = False
 
         result = deco.run_once(_train, (), {"lr": 0.01})
 
         assert result is None
         mock_gb.load_graph.assert_called_once()
         mock_gb.save_graph.assert_not_called()
+        mock_sched_cls.assert_not_called()

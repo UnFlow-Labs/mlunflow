@@ -12,7 +12,7 @@ def _f2():
 
 class TestComputeGraph:
     def setup_method(self):
-        self.graph = ComputeGraph()
+        self.graph = ComputeGraph("unflow_test_graph")
         self.s1 = RState(name="s1", procedure=_f1, args={})
         self.s2 = RState(name="s2", procedure=_f2, args={})
 
@@ -65,7 +65,7 @@ class TestComputeGraph:
         self.graph.add_transformation(self.s1, self.s2, t)
 
         json_data = self.graph.graph2json()
-        new_graph = ComputeGraph()
+        new_graph = ComputeGraph("unflow_test_graph")
         new_graph.json2graph(json_data)
 
         assert new_graph.get_state("s1") is not None
@@ -77,7 +77,7 @@ class TestComputeGraph:
         self.graph.add_state(self.s1)
         json_data = self.graph.graph2json()
 
-        new_graph = ComputeGraph()
+        new_graph = ComputeGraph("unflow_test_graph")
         new_graph.json2graph(json_data)
         restored = new_graph.get_state("s1")
         assert restored.status == RStateStatus.COMPLETED

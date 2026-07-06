@@ -4,13 +4,11 @@ import os
 import sys
 import time
 from collections import deque
-from multiprocessing import Pool
 
 import cloudpickle
 
 from unflow.core.executors.executor import Executor
-from unflow.core.executors.local_exectuor import Job
-from unflow.core.unflow_types import RState
+from unflow.core.unflow_types import Job, RState
 
 
 def _resolve_context():
@@ -31,7 +29,7 @@ def _run_state(pickled_state: bytes):
 class MultiprocessingExecutor(Executor):
     def __init__(self, max_workers: int | None = None):
         self._max_workers = max_workers
-        self._pool: Pool | None = None
+        self._pool = None
         self._pending: dict[object, Job] = {}
         self._completed: deque[Job] = deque()
 
@@ -43,9 +41,11 @@ class MultiprocessingExecutor(Executor):
     def submit(self, state: RState):
         self._ensure_pool()
         pickled = cloudpickle.dumps(state)
-        async_result = self._pool.apply_async(_run_state, (pickled,))
+        async_result = self._pool.apply_async(_run_state, (pickled,))  # type: ignore[attr-defined]
         job = Job(state)
+        job.start_time = time.time()
         self._pending[async_result] = job
+
         return job
 
     def wait(self):
@@ -63,6 +63,7 @@ class MultiprocessingExecutor(Executor):
                 except Exception as e:
                     job.error = e
                 job.completed = True
+                job.end_time = time.time()
                 self._completed.append(job)
         return self._completed.popleft()
 

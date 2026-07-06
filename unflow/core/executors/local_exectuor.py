@@ -1,15 +1,7 @@
-from dataclasses import dataclass
+from time import time
 
 from unflow.core.executors.executor import Executor
-from unflow.core.unflow_types import RState
-
-
-@dataclass
-class Job:
-    state: RState
-    output: object = None
-    error: Exception | None = None
-    completed: bool = False
+from unflow.core.unflow_types import Job, RState
 
 
 class LocalExecutor(Executor):
@@ -21,10 +13,13 @@ class LocalExecutor(Executor):
         job = Job(state)
 
         try:
+            job.start_time = time()
             job.output = state.procedure(**state.args)
 
         except Exception as e:
             job.error = e
+        finally:
+            job.end_time = time()
 
         job.completed = True
 

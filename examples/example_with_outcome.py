@@ -8,7 +8,16 @@ def train_2(lr, epochs=10, optimizer="adam", batch_size=32, model="resnet", data
         f"batch size: {batch_size}, model: {model}, dataset: {dataset}"
     )
     # Simulate training process
-    return {"status": "success"}
+    print("Training completed.")
+    return {
+        "lr": lr,
+        "epochs": epochs,
+        "optimizer": optimizer,
+        "batch_size": batch_size,
+        "model": model,
+        "dataset": dataset,
+        "accuracy": 0.9,
+    }
 
 
 if __name__ == "__main__":
@@ -33,8 +42,8 @@ if __name__ == "__main__":
         },
     ]
     # train_2.clear_graph()
-    train_2(**combinations[0])
-    train_2(**combinations[1])
-    train_2(**combinations[2])
-    train_2(**combinations[3])
-    # print(f"Graph edges after running the procedure: {engine.graph.graph.edges(data=True)}")
+    for combo in combinations:
+        train_2(**combo)
+        outcomes = train_2.get_outcomes()
+for state_name, outcome in outcomes.items():
+    print(f"State: {state_name}, Outcome: {outcome.to_json()}")
