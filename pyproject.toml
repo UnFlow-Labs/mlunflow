@@ -15,7 +15,6 @@ dependencies = [
     "orjson",
     "pydantic",
     "numpy",
-    "pyvis"
 ]
 version = "0.0.0"
 

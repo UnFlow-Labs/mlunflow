@@ -4,7 +4,8 @@ from typing import TYPE_CHECKING, Any
 
 import deepdiff
 from orderly_set import OrderedSet
-from unflow.core.change_types import ArgTypeChangeType, ArgValueChangeType, CodeChangeType
+
+from unflow.core.change_types import ArgTypeChangeType, ArgValueChangeType
 
 if TYPE_CHECKING:
     pass
@@ -27,6 +28,7 @@ def get_procedure_changes(source1: str, source2: str) -> dict[int, str]:
 
 def diff_procedure(source1: str, source2: str) -> bool:
     return bool(get_procedure_changes(source1, source2))
+
 
 def get_arg_name(arg_key: str) -> str:
     """
@@ -55,7 +57,7 @@ def get_args_changes(args1: dict, args2: dict) -> dict[str, ArgValueChangeType |
                     arg_name = get_arg_name(key)
                     if change_type == "values_changed":
                         changes[arg_name] = ArgValueChangeType(
-                            #get the name of the argument from the key
+                            # get the name of the argument from the key
                             name=f"{arg_name}Change",
                             description=f"Value changed from {value['old_value']} to {value['new_value']}",
                             arg_name=arg_name,
@@ -94,7 +96,7 @@ def get_args_changes(args1: dict, args2: dict) -> dict[str, ArgValueChangeType |
                         arg_name = get_arg_name(item)
                         changes[arg_name] = ArgValueChangeType(
                             name=f"{arg_name}Change",
-                            description=f"Argument added with value <added>",
+                            description="Argument added with value <added>",
                             arg_name=arg_name,
                             from_value=None,
                             to_value="<added>",
@@ -103,7 +105,7 @@ def get_args_changes(args1: dict, args2: dict) -> dict[str, ArgValueChangeType |
                         arg_name = get_arg_name(item)
                         changes[arg_name] = ArgValueChangeType(
                             name=f"{arg_name}Change",
-                            description=f"Argument removed with value <removed>",
+                            description="Argument removed with value <removed>",
                             arg_name=arg_name,
                             from_value="<removed>",
                             to_value=None,
