@@ -1,9 +1,11 @@
+from collections.abc import Callable
+
 import networkx as nx
 import orjson
 from networkx.readwrite import json_graph
 
 from unflow.core.json_encoder import dumps
-from unflow.core.unflow_types import RState, Transformation
+from unflow.core.unflow_types import RState, RStateStatus, Transformation
 
 
 class ComputeGraph:
@@ -31,6 +33,61 @@ class ComputeGraph:
         for _u, _v, data in self.graph.edges(data=True):
             transformations.append(data["transformation"])
         return transformations
+
+    def query_states(
+        self,
+        status: RStateStatus | str | None = None,
+        name_contains: str | None = None,
+        args_contains: dict | None = None,
+        predicate: Callable[[RState], bool] | None = None,
+    ) -> list[RState]:
+        matched_states = []
+        normalized_status = status.value if isinstance(status, RStateStatus) else status
+
+        for state in self.get_states():
+            if normalized_status is not None and state.status.value != normalized_status:
+                continue
+            if name_contains is not None and name_contains not in state.name:
+                continue
+            if args_contains is not None:
+                has_all_args = all(state.args.get(key) == value for key, value in args_contains.items())
+                if not has_all_args:
+                    continue
+            if predicate is not None and not predicate(state):
+                continue
+            matched_states.append(state)
+
+        return matched_states
+
+    def query_transformations(
+        self,
+        from_state: str | None = None,
+        to_state: str | None = None,
+        has_args_changes: bool | None = None,
+        has_procedure_changes: bool | None = None,
+        predicate: Callable[[Transformation], bool] | None = None,
+    ) -> list[Transformation]:
+        matched_transformations = []
+
+        for _u, _v, data in self.graph.edges(data=True):
+            transformation = data["transformation"]
+            if from_state is not None and transformation.state1.name != from_state:
+                continue
+            if to_state is not None and transformation.state2.name != to_state:
+                continue
+            if has_args_changes is not None and bool(transformation.args_changes) != has_args_changes:
+                continue
+            if has_procedure_changes is not None and bool(transformation.p_changes) != has_procedure_changes:
+                continue
+            if predicate is not None and not predicate(transformation):
+                continue
+            matched_transformations.append(transformation)
+
+        return matched_transformations
+
+    def shortest_path(self, from_state: str, to_state: str) -> list[RState]:
+        path_node_names = nx.shortest_path(self.graph, source=from_state, target=to_state)
+        return [self.state_map[state_name] for state_name in path_node_names]
 
     def graph2json(
         self,

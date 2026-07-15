@@ -81,3 +81,39 @@ class TestComputeGraph:
         new_graph.json2graph(json_data)
         restored = new_graph.get_state("s1")
         assert restored.status == RStateStatus.COMPLETED
+
+    def test_query_states_by_name_and_args(self):
+        self.s1.args = {"model": 0, "hesitation": False}
+        self.s2.args = {"model": 1, "hesitation": True}
+        self.graph.add_state(self.s1)
+        self.graph.add_state(self.s2)
+
+        states = self.graph.query_states(name_contains="s", args_contains={"model": 0})
+
+        assert states == [self.s1]
+
+    def test_query_transformations_by_source_and_args_changes(self):
+        self.s1.args = {"x": 1}
+        self.s2.args = {"x": 2}
+        self.graph.add_state(self.s1)
+        self.graph.add_state(self.s2)
+        t = Transformation("t", self.s1, self.s2)
+        self.graph.add_transformation(self.s1, self.s2, t)
+
+        transformations = self.graph.query_transformations(from_state="s1", has_args_changes=True)
+
+        assert transformations == [t]
+
+    def test_shortest_path(self):
+        s3 = RState(name="s3", procedure=_f1, args={})
+        self.graph.add_state(self.s1)
+        self.graph.add_state(self.s2)
+        self.graph.add_state(s3)
+        t1 = Transformation("t1", self.s1, self.s2)
+        t2 = Transformation("t2", self.s2, s3)
+        self.graph.add_transformation(self.s1, self.s2, t1)
+        self.graph.add_transformation(self.s2, s3, t2)
+
+        path = self.graph.shortest_path("s1", "s3")
+
+        assert [state.name for state in path] == ["s1", "s2", "s3"]

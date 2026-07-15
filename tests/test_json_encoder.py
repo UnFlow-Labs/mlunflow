@@ -75,6 +75,14 @@ class TestDumps:
         result = orjson.loads(dumps(d))
         assert result["self"] == "<cycle>"
 
+    def test_repeated_reference_is_not_cycle(self):
+        shared = {"v": 1}
+        data = {"a": shared, "b": shared}
+
+        result = orjson.loads(dumps(data))
+
+        assert result == {"a": {"v": 1}, "b": {"v": 1}}
+
     def test_dataclass(self):
         @dataclass
         class Point:

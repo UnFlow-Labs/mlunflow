@@ -34,6 +34,10 @@ class TestUnflowDecorator:
         assert wrapped.__name__ == "_train"
         assert hasattr(wrapped, "run_multiple")
         assert hasattr(wrapped, "clear_graph")
+        assert hasattr(wrapped, "query_states")
+        assert hasattr(wrapped, "query_transformations")
+        assert hasattr(wrapped, "shortest_path")
+        assert hasattr(wrapped, "shortest_path_to_lowest_outcome")
 
     def test_call__returns_output(self, decorator):
         deco, _ = decorator
@@ -107,6 +111,155 @@ class TestUnflowDecorator:
         wrapped.clear_graph()
         mock_gb.compute_graph.clear.assert_called_once()
         mock_gb.db.clear_graph.assert_called_once()
+
+    def test_query_states(self, decorator):
+        deco, mock_gb = decorator
+        wrapped = deco(_train)
+        mock_gb.compute_graph.query_states.return_value = ["s1"]
+
+        result = wrapped.query_states(name_contains="s")
+
+        assert result == ["s1"]
+        mock_gb.load_graph.assert_called_with("_train")
+        mock_gb.compute_graph.query_states.assert_called_once_with(name_contains="s")
+
+    def test_query_transformations(self, decorator):
+        deco, mock_gb = decorator
+        wrapped = deco(_train)
+        mock_gb.compute_graph.query_transformations.return_value = ["t1"]
+
+        result = wrapped.query_transformations(from_state="s1")
+
+        assert result == ["t1"]
+        mock_gb.load_graph.assert_called_with("_train")
+        mock_gb.compute_graph.query_transformations.assert_called_once_with(from_state="s1")
+
+    def test_shortest_path(self, decorator):
+        deco, mock_gb = decorator
+        wrapped = deco(_train)
+        mock_gb.compute_graph.shortest_path.return_value = ["s1", "s2"]
+
+        result = wrapped.shortest_path("s1", "s2")
+
+        assert result == ["s1", "s2"]
+        mock_gb.load_graph.assert_called_with("_train")
+        mock_gb.compute_graph.shortest_path.assert_called_once_with("s1", "s2")
+
+    def test_shortest_path_to_lowest_outcome(self, decorator):
+        deco, _ = decorator
+        wrapped = deco(_train)
+        deco.shortest_path_to_lowest_outcome = MagicMock(
+            return_value={
+                "target_state": "s2",
+                "lowest_outcome": 0.1,
+                "path": ["s0", "s1", "s2"],
+            }
+        )
+
+        result = wrapped.shortest_path_to_lowest_outcome(output_key="loss", from_state="s0")
+
+        assert result["target_state"] == "s2"
+        assert result["lowest_outcome"] == 0.1
+        assert result["path"] == ["s0", "s1", "s2"]
+        deco.shortest_path_to_lowest_outcome.assert_called_once_with(
+            _train,
+            output_key="loss",
+            from_state="s0",
+            scorer=None,
+        )
+
+    def test_shortest_path_to_lowest_outcome__numeric_outputs(self, decorator):
+        deco, mock_gb = decorator
+
+        s1 = MagicMock()
+        s1.name = "s1"
+        s2 = MagicMock()
+        s2.name = "s2"
+        s3 = MagicMock()
+        s3.name = "s3"
+
+        mock_gb.compute_graph.get_states.return_value = [s1, s2, s3]
+        mock_gb.compute_graph.graph.nodes = ["s1", "s2"]
+        mock_gb.compute_graph.graph.in_degree.side_effect = lambda node: 0 if node in {"s1", "s2"} else 1
+
+        outcome1 = MagicMock()
+        outcome1.outputs = 0.8
+        outcome2 = MagicMock()
+        outcome2.outputs = 0.3
+        outcome3 = MagicMock()
+        outcome3.outputs = 0.5
+
+        mock_gb.load_outcome.side_effect = [outcome1, outcome2, outcome3]
+        mock_gb.compute_graph.shortest_path.side_effect = [[s1, s2], [s2]]
+
+        result = deco.shortest_path_to_lowest_outcome(_train)
+
+        assert result == {"target_state": "s2", "lowest_outcome": 0.3, "path": ["s2"]}
+
+    def test_shortest_path_to_lowest_outcome__dict_key_outputs(self, decorator):
+        deco, mock_gb = decorator
+
+        s1 = MagicMock()
+        s1.name = "s1"
+        s2 = MagicMock()
+        s2.name = "s2"
+
+        mock_gb.compute_graph.get_states.return_value = [s1, s2]
+
+        outcome1 = MagicMock()
+        outcome1.outputs = {"loss": 0.4, "acc": 0.7}
+        outcome2 = MagicMock()
+        outcome2.outputs = {"loss": 0.2, "acc": 0.8}
+        mock_gb.load_outcome.side_effect = [outcome1, outcome2]
+
+        mock_gb.compute_graph.shortest_path.return_value = [s1, s2]
+
+        result = deco.shortest_path_to_lowest_outcome(_train, output_key="loss", from_state="s1")
+
+        assert result == {"target_state": "s2", "lowest_outcome": 0.2, "path": ["s1", "s2"]}
+
+    def test_wraps_function_has_dataset_amplification_query(self, decorator):
+        deco, _ = decorator
+        wrapped = deco(_train)
+
+        assert hasattr(wrapped, "datasets_amplifying_model_differences")
+
+    def test_datasets_amplifying_model_differences(self, decorator):
+        deco, mock_gb = decorator
+
+        s1 = MagicMock()
+        s1.args = {"data": "d1", "model": 0, "hesitation": False}
+        s2 = MagicMock()
+        s2.args = {"data": "d1", "model": 1, "hesitation": False}
+        s3 = MagicMock()
+        s3.args = {"data": "d2", "model": 0, "hesitation": False}
+        s4 = MagicMock()
+        s4.args = {"data": "d2", "model": 1, "hesitation": False}
+
+        mock_gb.compute_graph.get_states.return_value = [s1, s2, s3, s4]
+
+        o1 = MagicMock()
+        o1.outputs = 10
+        o2 = MagicMock()
+        o2.outputs = 4
+        o3 = MagicMock()
+        o3.outputs = 7
+        o4 = MagicMock()
+        o4.outputs = 8
+        mock_gb.load_outcome.side_effect = [o1, o2, o3, o4]
+
+        result = deco.datasets_amplifying_model_differences(
+            _train,
+            dataset_arg="data",
+            model_arg="model",
+            fixed_args={"hesitation": False},
+        )
+
+        assert len(result) == 2
+        assert result[0]["dataset"] == "d1"
+        assert result[0]["amplification"] == 6
+        assert result[1]["dataset"] == "d2"
+        assert result[1]["amplification"] == 1
 
 
 class TestRunOnce:

@@ -1,4 +1,6 @@
 from unflow.core.unflow_core import unflowdecorator
+from pyvis.network import Network
+
 
 
 @unflowdecorator()
