@@ -1,8 +1,10 @@
 from unflow.core.diff_code import (
-    diff_args,
     diff_procedure,
-    get_args_changes,
     get_procedure_changes,
+)
+from unflow.core.diff_args import (
+    diff_args,
+    get_args_changes,
 )
 
 SRC_A = """

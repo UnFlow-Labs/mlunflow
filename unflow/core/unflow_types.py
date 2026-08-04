@@ -9,7 +9,8 @@ from typing import Any
 import cloudpickle
 
 from unflow.core.constants import PICKLE_PATH
-from unflow.core.diff_code import get_args_changes, get_procedure_changes
+from unflow.core.diff_code import get_procedure_changes
+from unflow.core.diff_args import get_args_changes
 from unflow.core.json_encoder import dumps
 
 Procedure = Callable[..., Any]

@@ -9,27 +9,27 @@ wer = {
 
 
 @unflowdecorator()
-def evaluate_function(model, data, hesitation=False):
+def evaluate_function(model, data, device="cpu", hesitation=False):
     # Simulate evaluation process
     if hesitation:
         if data == "1":
-            return wer["1_h"][model]
+            return {"wer": wer["1_h"][model]}
         elif data == "2":
-            return wer["2_h"][model]
+            return {"wer": wer["2_h"][model]}
     else:
         if data == "1":
-            return wer["1"][model]
+            return {"wer": wer["1"][model]}
         elif data == "2":
-            return wer["2"][model]
+            return {"wer": wer["2"][model]}
 
 
-evaluate_function.clear_graph()
+# evaluate_function.clear_graph()
 models = [0, 1, 2, 3]
 data_sets = ["1", "2"]
 for model in models:
     for data in data_sets:
-        evaluate_function(model, data, hesitation=False)
-        evaluate_function(model, data, hesitation=True)
+        evaluate_function(model, data, device="cpu", hesitation=False)
+        evaluate_function(model, data, device="cpu", hesitation=True)
 
 G = evaluate_function.compute_graph.graph
 print(f"Graph has {len(G.nodes)} nodes and {len(G.edges)} edges.")

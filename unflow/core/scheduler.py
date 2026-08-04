@@ -50,7 +50,9 @@ class Scheduler:
         # ----------------------------------------
 
         for node in nx.topological_sort(subgraph):
-            if self.records[node].status == RStateStatus.COMPLETED or self.records[node].status == RStateStatus.FAILED:
+            print(self.graph.nodes[node]["state"].name, self.records[node].status)
+            if self.records[node].status == RStateStatus.COMPLETED or self.records[node].status == RStateStatus.FAILED \
+            or self.records[node].status == RStateStatus.RUNNING:
                 continue
             if self._ready(node):
                 _submit(node)
