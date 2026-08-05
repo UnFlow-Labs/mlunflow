@@ -29,7 +29,7 @@ version = "0.0.0"
 [dependency-groups]
 dev = [
     "bandit[toml]>=1.8.6",
-    "coverage>=7.10.6",
+    "coverage>=7.15.2",
     "deptry>=0.23.1",
     "invoke>=2.2.0",
     "mypy>=1.17.1",
