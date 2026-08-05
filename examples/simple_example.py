@@ -1,14 +1,12 @@
 from unflow.core.unflow_core import unflowdecorator
 
 
+
 @unflowdecorator()
-def train_2(lr, epochs=10, optimizer="adam", batch_size=32, model="resnet", dataset="cifar10"):
-    print(
-        f"Training with learning rate: {lr}, epochs: {epochs}, optimizer: {optimizer}, "
-        f"batch size: {batch_size}, model: {model}, dataset: {dataset}"
-    )
-    # Simulate training process
-    return {"status": "success"}
+def train_2(lr, epochs, optimizer, batch_size, model, dataset):
+    print(f"Training {model} on {dataset} with lr={lr}, epochs={epochs}, optimizer={optimizer}, batch_size={batch_size}")
+    # Here you would add the actual training logic, e.g., loading data, defining the model, training loop, etc.
+    # For demonstration purposes, we just print the parameters.
 
 
 if __name__ == "__main__":
