@@ -2,61 +2,50 @@
 
 ## Prerequisites
 
-- [uv](https://docs.astral.sh/uv/getting-started/installation/) 0.11+ (Python is managed automatically by uv)
+- Python 3.11+
+- [uv](https://docs.astral.sh/uv/getting-started/installation/)
 
-## Installation
+## Install
 
 ```bash
 uv sync
 ```
 
-This creates a virtual environment (`.venv`) and installs the package in editable mode along with all dev dependencies.
+## First Run
 
-## Available Tasks
+Create a file such as `examples/basic.py`:
 
-Tasks are managed with [taskipy](https://github.com/illBeRoy/taskipy):
+```python
+from unflow.core.unflow_core import unflowdecorator
 
-| Task            | Description                                  |
-| --------------- | -------------------------------------------- |
-| `task format`   | Format code with Ruff                        |
-| `task lint`     | Lint and auto-fix with Ruff                  |
-| `task type`     | Typecheck with ty                            |
-| `task tests`    | Run the test suite with pytest               |
-| `task coverage` | Run tests and report coverage (100% gate)    |
-| `task docs`     | Build documentation with Zensical            |
-| `task serve`    | Serve documentation locally                  |
-| `task upgrade`  | Upgrade all dependencies with uv             |
-| `task release`  | Create a release with python-semantic-release |
 
-## Project Layout
+@unflowdecorator()
+def train(lr: float = 0.01, epochs: int = 10) -> dict[str, float]:
+    return {"loss": 0.5, "lr": lr, "epochs": float(epochs)}
 
-```text
-src/
-  unflow/
-    __init__.py
-    unflow.py
-tests/
-  test_unflow.py
-.github/
-  workflows/       # CI, docs, and release automation
+
+print(train(lr=0.01, epochs=10))
+print(train(lr=0.01, epochs=10))  # duplicate args -> skipped path
 ```
 
-## Quality Gates
+Run it with:
 
-Every pull request runs CI that checks, in order:
+```bash
+uv run python examples/basic.py
+```
 
-1. PR title follows [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `docs:`, ...)
-2. Ruff lint (`ruff check`) and format (`ruff format --check`)
-3. Type checking (`ty check`)
-4. Tests (`pytest -n auto`) and coverage (`coverage report` with `fail_under = 100`)
-5. Dependency vulnerability audit (`uv audit`)
+## Common Development Commands
 
-## Releasing
+```bash
+uv run pytest
+uv run ruff check .
+uv run ruff format .
+uv run mkdocs serve
+uv run mkdocs build --strict
+```
 
-Pushes to `main` with conventional commit messages trigger [python-semantic-release](https://python-semantic-release.readthedocs.io/), which:
+## Next Steps
 
-1. Bumps the version in `pyproject.toml` based on commit history
-2. Updates `CHANGELOG.md`
-3. Creates and pushes a `v*.*.*` tag
-
-The tag then triggers the release workflow, which builds the package, generates [PEP 740 attestations](https://peps.python.org/pep-0740/), and publishes to PyPI via Trusted Publishing — no API tokens required.
+- Learn the graph model in [Concepts](concepts.md)
+- See local vs parallel executors in [Local and Parallel Execution](how-to/local-and-parallel.md)
+- Explore all symbols in [API Reference](api/index.md)

@@ -1,9 +1,9 @@
 [project]
 name = "unflow"
-description = "Abstraction of experiements in ML"
+description = "A framework for fast and scalabe machine learning experimentation"
 readme = "README.md"
 authors = [
-    { name = "hnomair", email = "hazem.nomair@cambridge.org" }
+    { name = "Hazem Nomair", email = "hazem.nomair@cambridge.org" }
 ]
 requires-python = ">=3.11,<3.14.1"
 dependencies = [
@@ -31,11 +31,16 @@ dev = [
     "bandit[toml]>=1.8.6",
     "coverage>=7.10.6",
     "deptry>=0.23.1",
+    "griffe>=2.1.0",
     "invoke>=2.2.0",
+    "mkdocs>=1.6.1",
+    "mkdocs-material>=9.7.7",
+    "mkdocstrings[python]>=1.0.6",
     "mypy>=1.17.1",
     "pytest>=8.4.1",
     "pytest-cov>=6.2.1",
     "ruff>=0.12.10",
+    "taskipy>=1.14.1",
     "typeguard>=4.4.4",
     "vulture>=2.14",
 ]
@@ -117,3 +122,6 @@ ignore = [
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
+
+[tool.taskipy.tasks]
+tests = "pytest"

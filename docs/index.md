@@ -1,28 +1,40 @@
-# mlunflow
+# unflow
 
-A framework for fast and scalabe machine learning experimentation
+`unflow` is a graph-driven execution framework for experimentation workflows.
+It tracks function states by argument values, stores outcomes, and lets you query paths and differences across runs.
 
-## Features
+## Why unflow
 
-- Modern Python packaging with [uv](https://docs.astral.sh/uv/) and the `uv_build` backend
-- Fully typed with [ty](https://docs.astral.sh/ty/) (strict)
-- Ruff for linting and formatting (all rules enabled)
-- 100% test coverage enforcement with [coverage.py](https://coverage.readthedocs.io/)
-- Parallel, randomized, property-based tests (pytest-xdist, pytest-randomly, Hypothesis)
-- Pre-commit hooks including `actionlint`, `zizmor`, and `codespell`
-- Automated releases with [python-semantic-release](https://python-semantic-release.readthedocs.io/)
-- PyPI publishing with Trusted Publishing + PEP 740 attestations
-- Documentation built with [Zensical](https://zensical.org/docs/) and deployed to GitHub Pages
-- Docker multi-stage build, automated releases, and a full GitHub issue template suite
+- Build a state graph from function executions automatically
+- Skip duplicate runs when the same inputs were already evaluated
+- Query states and transformations for experiment analysis
+- Run locally or with multiprocessing executors
 
-## Quick Start
+## Quick Example
 
-```bash
-uv sync            # install dependencies
-task tests         # run the test suite
-task coverage      # run tests with coverage
-task type          # typecheck with ty
-task docs          # build documentation
+```python
+from unflow.core.unflow_core import unflowdecorator
+
+
+@unflowdecorator()
+def train(lr: float, epochs: int) -> dict[str, float]:
+	return {"loss": 0.5 / lr, "epochs": float(epochs)}
+
+
+result = train(lr=0.01, epochs=10)
+print(result)
+
+# run multiple combinations
+records = train.run_multiple(
+	[
+		{"kwargs": {"lr": 0.01, "epochs": 10}},
+		{"kwargs": {"lr": 0.02, "epochs": 10}},
+	]
+)
 ```
 
-See [Getting Started](getting-started.md) for details.
+## Read Next
+
+- Start with [Getting Started](getting-started.md)
+- Learn the model in [Concepts](concepts.md)
+- Browse all modules in [API Reference](api/index.md)
