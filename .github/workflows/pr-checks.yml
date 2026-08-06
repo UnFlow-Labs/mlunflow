@@ -31,9 +31,6 @@ jobs:
 
       - name: Static analysis
         uses: ./.github/actions/static-analysis
-        with:
-          token-gen-app-id: ${{ secrets.ARC_GITHUB_CI_TOKEN_GEN_APP_ID }}
-          token-gen-private-key: ${{ secrets.ARC_GITHUB_CI_TOKEN_GEN_KEY }}
 
   tests:
     name: Pytest
@@ -48,6 +45,3 @@ jobs:
 
       - name: Run tests
         uses: ./.github/actions/tests
-        with:
-          token-gen-app-id: ${{ secrets.ARC_GITHUB_CI_TOKEN_GEN_APP_ID }}
-          token-gen-private-key: ${{ secrets.ARC_GITHUB_CI_TOKEN_GEN_KEY }}

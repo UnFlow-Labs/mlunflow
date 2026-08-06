@@ -1,43 +1,152 @@
-# mlunflow
+# unflow (mlunflow)
 
-## 📋 Prerequisites
+`unflow` is a Python framework for reproducible, graph-based machine learning experimentation.
 
-- uv installed: https://docs.astral.sh/uv/
-- invoke: `uv tool install --with PyYAML --python 3.13 invoke`
-- Git LFS: https://git-lfs.com
-- (optional) GitHub CLI: https://cli.github.com/
+It wraps your training/evaluation functions and builds a **compute graph** of executions where:
 
-## 💻 Development workflow
+- each node is a normalized function invocation state
+- each edge is a transformation (arguments and/or procedure source changes)
+- repeated identical calls are de-duplicated
 
-1. Check out the code: `git clone https://github.com/CUPA-ARC/mlunflow.git`
-2. Go to your code and set up dependencies: `cd mlunflow && inv install`
-3. Create a new branch: `git checkout -b <Ticket Number>-<Ticket Name>`
-4. (Optional) Apply and updates and check if things still work: `inv update`
-    - If failed, rollback: `git reset --hard HEAD`
-    - If success, commit: `git commit -a -m 'Apply updates'`
-5. Make your changes, test them (`inv test`) and commit it (incl. the `uv.lock` file).
-    - Make sure to store all test files in `tests/fixtures/` so they are tracked by git lfs.
-7. Create a Pull Request (PR) from your feature branch to main: `gh pr new -w`
-    - The branch will be automatically deleted after merged.
+This makes it easier to understand *what changed* between runs and to query outcomes across experiment history.
 
-## 🔧 Development Commands
+## Why unflow
 
-Some of these commands might be useful while developing the software.
+- Track argument and code changes across iterations
+- Avoid re-running identical experiment states
+- Query states, transformations, shortest paths, and outcomes
+- Run locally by default or in parallel with multiprocessing
+- Persist graph snapshots and outcomes for later inspection
 
-- `inv install`: Installs all development dependencies.
-- `inv install --prod`: Installs the software as a python module (without dev dependencies).
-- `inv test`: Formats the code and runs tests.
-- `inv docker`: Builds the docker image.
-- `uv run ...`: If you want to manually run your code, prepred the command with `uv run`, so the right environment will
-  be used. e.g., `uv run python my_script.py`. More information at https://docs.astral.sh/uv/
-- `uv add <package>`: Add new package to the project and update `pyproject.toml`. More information
-  at https://docs.astral.sh/uv/
-- You can set up tab completion for `inv` commands. See https://docs.pyinvoke.org/en/stable/invoke.html#shell-tab-completion.
+## Installation
 
-### Other Commands
+### Prerequisites
 
-- `inv update`: Updates the dependencies, applies template changes and runs the tests.
-- `inv show-unused`: Shows unused code in your project.
-- `inv format`: Formats the code without running tests.
+- Python `>=3.11,<3.14.1`
+- [uv](https://docs.astral.sh/uv/getting-started/installation/)
 
-Created using [CUPA-ARC/scratch-python-template](https://github.com/CUPA-ARC/scratch-python-template).
+### Install dependencies (development)
+
+```bash
+uv sync
+```
+
+### Install as a package
+
+```bash
+uv pip install -e .
+```
+
+## Quick Start
+
+```python
+from unflow.core.unflow_core import unflowdecorator
+
+
+@unflowdecorator()
+def train(lr: float = 0.01, epochs: int = 10) -> dict[str, float]:
+   return {"loss": 0.5, "lr": lr, "epochs": float(epochs)}
+
+
+print(train(lr=0.01, epochs=10))
+print(train(lr=0.01, epochs=10))  # duplicate state -> not re-executed
+print(train(lr=0.02, epochs=10))
+
+print("states:", train.graph_size())
+print("outcomes:", train.get_outcomes())
+```
+
+Run it with:
+
+```bash
+uv run python examples/simple_example.py
+```
+
+## Core API
+
+Decorated functions expose helpers for experiment graph operations:
+
+- `run_multiple(combinations)`
+- `clear_graph()`
+- `graph_size()`
+- `get_outcomes()`
+- `query_states(...)`
+- `query_transformations(...)`
+- `query_with_outcomes(...)`
+- `shortest_path(from_state, to_state)`
+
+## Execution Modes
+
+- **LocalExecutor** (default): in-process execution
+- **MultiprocessingExecutor**: parallel execution with process pool
+
+Multiprocessing example:
+
+```python
+from unflow.core.executors.multiprocessing_executor import MultiprocessingExecutor
+from unflow.core.unflow_core import unflowdecorator
+
+
+@unflowdecorator(executor=MultiprocessingExecutor(max_workers=4))
+def train(lr: float, epochs: int) -> dict[str, float]:
+   return {"score": lr * epochs}
+```
+
+See runnable scripts in [examples/](examples).
+
+## Documentation
+
+Project docs are in [docs/](docs) and include:
+
+- [Getting Started](docs/getting-started.md)
+- [Concepts](docs/concepts.md)
+- [Examples](docs/how-to/examples.md)
+- [Local and Parallel Execution](docs/how-to/local-and-parallel.md)
+- [API Reference](docs/api/index.md)
+
+Build and serve locally:
+
+```bash
+uv run mkdocs serve
+```
+
+Build static docs:
+
+```bash
+uv run mkdocs build --strict
+```
+
+## Development
+
+Common commands:
+
+```bash
+# tests
+uv run pytest
+
+# formatting and linting
+uv run ruff format
+uv run ruff check .
+
+# type checks
+uv run mypy unflow/
+```
+
+If you use Invoke tasks (`tasks.py`):
+
+```bash
+uv run invoke format
+uv run invoke static-analysis
+uv run invoke test
+```
+
+## Repository Layout
+
+- `src/unflow/` — package source
+- `tests/` — test suite
+- `examples/` — runnable examples from simple to end-to-end ML workflows
+- `docs/` — MkDocs content
+
+## License
+
+Apache-2.0

@@ -1,0 +1,64 @@
+site_name: unflow
+repo_url: https://github.com/ha2emnomer/mlunflow
+site_url: https://ha2emnomer.github.io/mlunflow
+site_description: A framework for fast and scalabe machine learning experimentation
+site_author: Hazem
+repo_name: ha2emnomer/mlunflow
+edit_uri: edit/main/docs/
+copyright: Maintained by <a href="https://github.com/ha2emnomer">Hazem</a>.
+nav:
+  - Home: index.md
+  - Getting Started: getting-started.md
+  - Concepts: concepts.md
+  - How-To:
+      - Examples: how-to/examples.md
+      - Local and Parallel Execution: how-to/local-and-parallel.md
+  - API Reference:
+      - Overview: api/index.md
+      - Core:
+          - Decorator: api/core/unflow_core.md
+          - Graph Builder: api/core/builder.md
+          - Scheduler: api/core/scheduler.md
+          - Types: api/core/unflow_types.md
+      - Graph:
+          - Compute Graph: api/graph/compute_graph.md
+      - Executors:
+          - Executor Interface: api/core/executors/executor.md
+          - Local Executor: api/core/executors/local_executor.md
+          - Multiprocessing Executor: api/core/executors/multiprocessing_executor.md
+      - Utilities:
+          - JSON Encoder: api/core/json_encoder.md
+          - Diff Args: api/core/diff_args.md
+          - Diff Code: api/core/diff_code.md
+          - Simple DB: api/core/simpledb.md
+  - Writing Docs: documentation-style.md
+  - License: license.md
+theme:
+  name: material
+  icon:
+    repo: fontawesome/brands/github
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths:
+            - src
+          options:
+            show_source: false
+            show_root_heading: true
+            show_root_toc_entry: true
+            heading_level: 2
+            members_order: source
+            inherited_members: false
+markdown_extensions:
+  - toc:
+      permalink: true
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      use_pygments: true
+      pygments_style: emacs
+      noclasses: true
+  - pymdownx.inlinehilite
+  - pymdownx.emoji
+  - admonition

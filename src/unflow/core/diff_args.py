@@ -99,11 +99,14 @@ def parse_deepdiff_path(path: str) -> tuple[list[str], str]:
     Returns (parents, key)
 
     Examples:
-        root['p1']['p2']['k'] -> (['p1', 'p2'], 'k')
-        root['p1'].k          -> (['p1'], 'k')
-        root[0].name          -> (['0'], 'name')
-        root['a'][2]['b']     -> (['a', '2'], 'b')
+        ``root['p1']['p2']['k'] -> (['p1', 'p2'], 'k')``
+        ``root['p1'].k          -> (['p1'], 'k')``
+        ``root[0].name          -> (['0'], 'name')``
+        ``root['a'][2]['b']     -> (['a', '2'], 'b')``
     """
+    if path == "root":
+        return [], "root"
+
     tokens = []
 
     for sq, dq, index, attr in _TOKEN_RE.findall(path):
