@@ -62,7 +62,8 @@ class CodeChangeType(ChangeType):
 def normalize_arg_name(arg_name: str) -> str:
     """
     Normalize the argument name by removing any leading or trailing whitespace,
-    removing underscores, and converting to lowercase. This ensures that argument names are consistent and can be compared accurately.
+    removing underscores, and converting to lowercase. 
+    This ensures that argument names are consistent and can be compared accurately.
 
     Args:
         arg_name (str): The argument name to normalize.
@@ -82,9 +83,10 @@ def get_full_arg_name(parents: list[str], arg_name: str) -> str:
     Returns:
         str: The full argument name.
     """
-    return ".".join(parents + [arg_name]) if parents else arg_name
+    return ".".join([*parents, arg_name]) if parents else arg_name
 
-def ArgValueChangeFactory(arg_name: str, parents:list[str], from_value: Any | None, to_value: Any | None) -> ArgValueChangeType:
+def ArgValueChangeFactory(arg_name: str, parents:list[str], 
+                          from_value: Any | None, to_value: Any | None) -> ArgValueChangeType:
     """
     Factory function to create an instance of ArgValueChangeType.
 
@@ -104,7 +106,8 @@ def ArgValueChangeFactory(arg_name: str, parents:list[str], from_value: Any | No
         from_value=from_value,
         to_value=to_value,
     )
-def ArgTypeChangeFactory(arg_name: str, parents:list[str], from_type: type | None, to_type: type | None) -> ArgTypeChangeType:
+def ArgTypeChangeFactory(arg_name: str, parents:list[str], 
+                         from_type: type | None, to_type: type | None) -> ArgTypeChangeType:
     """
     Factory function to create an instance of ArgTypeChangeType.
 

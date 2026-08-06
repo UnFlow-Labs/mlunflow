@@ -1,7 +1,7 @@
 """Test comparing two separately created models with hooks"""
-import torch
 import torch.nn as nn
-from unflow.core.diff_args import get_args_changes, _to_comparable
+
+from unflow.core.diff_args import _to_comparable, get_args_changes
 
 # Create two identical models separately
 model1 = nn.Linear(10, 5)
@@ -22,7 +22,7 @@ print("Comparing two separately created models with hooks:")
 print(f"Changes detected: {bool(changes)}")
 if changes:
     print(f"Change keys: {list(changes.keys())}")
-    for key, change in changes.items():
+    for key in changes:
         print(f"  {key}")
 
 # Let's manually check what gets compared

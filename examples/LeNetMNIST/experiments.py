@@ -1,5 +1,4 @@
-from examples.LeNetMNIST.lenet import TrainingConfig, run_experiment, ModelConfig, DataConfig
-
+from examples.LeNetMNIST.lenet import DataConfig, ModelConfig, TrainingConfig, run_experiment
 
 # run_experiment.clear_graph()  # Clear the graph before starting the experiment
 training_config = TrainingConfig(num_epochs=5, optimizer="Adam", optimizer_params={"lr": 0.001})

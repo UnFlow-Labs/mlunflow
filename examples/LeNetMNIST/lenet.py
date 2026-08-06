@@ -1,13 +1,14 @@
 # Load in relevant libraries, and alias where appropriate
 import sys
 
-from  pydantic import BaseModel, Field, ConfigDict
 import torch
 import torch.nn as nn
 import torchvision
 import torchvision.transforms as transforms
+from pydantic import BaseModel, ConfigDict, Field
+
 from unflow.core.unflow_core import unflowdecorator
-    
+
 # Define relevant variables for the ML task
 
 def choose_optimizer(optimizer_name, model_parameters, **kwargs):
@@ -95,7 +96,7 @@ def set_loaders(data_config: DataConfig):
 class ConvBlock(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, use_batchnorm=True, activation_fn="ReLU",
                  dropout_rate=0.5):
-        super(ConvBlock, self).__init__()
+        super().__init__()
         layers = [nn.Conv2d(in_channels, out_channels, kernel_size, stride, padding)]
         if use_batchnorm:
             layers.append(nn.BatchNorm2d(out_channels))
@@ -118,7 +119,7 @@ class LeNet5(nn.Module):
     def __init__(self, num_classes, use_batchnorm=True, dropout_rate=0.5,activation_fn="ReLU", 
                  n_blocks=2, block_channels=[6, 16], kernel_sizes=[5, 5], strides=[1, 1], paddings=[0, 0],
                  n_fc_layers=2, fc_hidden_sizes=[120, 84]):
-        super(LeNet5, self).__init__()
+        super().__init__()
         self.conv_part = nn.Sequential()
         for i in range(n_blocks):
             in_channels = 1 if i == 0 else block_channels[i - 1]

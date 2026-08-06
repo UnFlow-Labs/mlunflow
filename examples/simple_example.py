@@ -1,7 +1,6 @@
 from unflow.core.unflow_core import unflowdecorator
 
 
-
 @unflowdecorator()
 def train_2(lr, epochs, optimizer, batch_size, model, dataset):
     print(f"Training {model} on {dataset} with lr={lr}, epochs={epochs}, optimizer={optimizer}, batch_size={batch_size}")

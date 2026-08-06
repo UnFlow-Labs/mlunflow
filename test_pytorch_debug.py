@@ -1,6 +1,6 @@
 """Test to see what actually triggers changes in PyTorch objects"""
-import torch
 import torch.nn as nn
+
 from unflow.core.diff_args import get_args_changes
 
 # Register a hook to modify the hooks dict
