@@ -1,161 +1,119 @@
-
 [project]
 name = "unflow"
-version = "0.1.0"
-description = "A framework for fast and scalabe machine learning experimentation"
-authors = [{ name = "Hazem", email = "impulselabs2012@gmail.com" }]
+description = "Abstraction of experiements in ML"
 readme = "README.md"
-license = "Apache-2.0"
-license-files = ["LICENSE"]
-keywords = ["python"]
-requires-python = ">=3.13,<4"
-classifiers = [
-    "Development Status :: 2 - Pre-Alpha",
-    "Programming Language :: Python",
-    "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.13",
-    "Programming Language :: Python :: 3.14",
-    "Typing :: Typed",
+authors = [
+    { name = "hnomair", email = "hazem.nomair@cambridge.org" }
 ]
+requires-python = ">=3.11,<3.14.1"
 dependencies = [
+     "networkx>=3.6.1",
+    "deepdiff>=9.1.0",
+    "cloudpickle>=3.1.2",
+    # only if you directly import it
+    "orderly_set>=5.5.0",
+    "orjson",
+    "pydantic",
+    "numpy",
+    "torch",
+    "torchvision",
+    "datasets",
+    "transformers",
+    "accelerate>=1.1.0",
+    " pip-system-certs",
+    "evaluate",
+    "scikit-learn"
 ]
+version = "0.0.0"
 
 [dependency-groups]
 dev = [
-    "ty>=0.0.65",
-    "pytest>=9.1.1",
-    "pytest-timeout>=2.4.0",
-    "pytest-xdist>=3.8.0",
-    "pytest-randomly>=4.1.0",
-    "hypothesis>=6.164.0",
-    "coverage>=7.15.2",
-    "ruff>=0.16.1",
-    "taskipy>=1.14.1",
-    "zensical>=0.0.52",
-    "pre-commit>=4.6.1",
-    "python-semantic-release>=10.6.1",
+    "bandit[toml]>=1.8.6",
+    "coverage>=7.10.6",
+    "deptry>=0.23.1",
+    "invoke>=2.2.0",
+    "mypy>=1.17.1",
+    "pytest>=8.4.1",
+    "pytest-cov>=6.2.1",
+    "ruff>=0.12.10",
+    "typeguard>=4.4.4",
+    "vulture>=2.14",
 ]
 
-[project.urls]
-homepage = "https://github.com/ha2emnomer/mlunflow"
-repository = "https://github.com/ha2emnomer/mlunflow.git"
-documentation = "https://ha2emnomer.github.io/mlunflow"
-issues = "https://github.com/ha2emnomer/mlunflow/issues"
+[project.scripts]
+unflow = "unflow.main:app"
 
 [build-system]
-requires = ["uv_build>=0.12.1,<0.13.0"]
+requires = ["uv_build>=0.8.12,<0.9.0"]
 build-backend = "uv_build"
 
-[tool.uv]
-package = true
+[tool.uv.build-backend]
+module-name = "unflow"
+module-root = "src"
 
-[tool.taskipy.tasks]
-format = { cmd = "ruff format ./src/", help = "Format code using ruff" }
-lint = { cmd = "ruff check --fix ./src/", help = "Lint code using ruff" }
-type = { cmd = "ty check", help = "Typecheck code using ty" }
-docs = { cmd = "zensical build", help = "Build documentation" }
-serve = { cmd = "zensical serve", help = "Serve documentation" }
-release = { cmd = "uv run python-semantic-release version", help = "Create a release (version bump + changelog + tag)" }
-tests = { cmd = "pytest --verbose --color=yes tests", help = "Run all tests using pytest" }
-coverage = { cmd = "coverage run -m pytest tests && coverage report", help = "Generate coverage report" }
-run = { cmd = "uv run ./src/unflow/unflow.py", help = "Run main application" }
-upgrade = { cmd = "uv sync --upgrade", help = "Upgrade all dependencies to latest versions."}
-dbuild = { cmd = "docker build --progress=plain -t \"unflow:Dockerfile\" .", help = "Build docker image" }
-drun = { cmd = "docker run --rm -it unflow:Dockerfile", help = "Run the built docker image" }
+[tool.pytest.ini_options]
+empty_parameter_set_mark = "fail_at_collect"
+typeguard-packages = "unflow"
+testpaths = ["tests"]
+norecursedirs = "tests/fixtures"
+
+[tool.coverage.run]
+branch = true
+source = ["unflow"]
+
+[tool.coverage.report]
+show_missing = true
+skip_empty = true
+fail_under = 80
+
+[tool.deptry]
+extend_exclude = ["tasks\\.py"]
+
+[tool.mypy]
+ignore_missing_imports = true
 
 [tool.ruff]
-line-length = 100
-indent-width = 4
-target-version = "py313"
-exclude = [
-    ".git",
-    ".venv",
-    "venv",
-    "__pycache__",
-    ".pytest_cache",
-    ".ruff_cache",
-    "build",
-    "dist",
-    "*.egg-info",
-    "htmlcov",
-    ".cache",
-]
-src = ["src", "tests"]
-
-[tool.ruff.lint]
-pydocstyle.convention = "google"
-fixable = ["ALL"]
-select = ["ALL"]
-ignore = [
-    "FA102",    # Flake8-future-annotations
-    "F401",     # Disable fix for unused imports
-    "B904",     # Allow raising exceptions without from e
-    "PLR0913",  # too many arguments
-    "CPY",      # Flake8-copyright
-    "T201",     # Debugging print statements
-    "ERA",      # Eradicate – detects commented-out code
-    "BLE001",   # Catch-all exceptions
-    "D100",     # missing docstring in public module
-    "D105",     # undocumented magic method
-    "D107",     # undocumented public init
-    "D203",     # incorrect-blank-line-before-class
-    "D205",     # line-between-summary-and-description
-    "D212",     # multi-line-summary-first-line
-    "D400",     # missing-trailing-period
-    "D407",     # missing-dashed-underline-after-section
-    "S311",     # rand-usage
-    "EM102",    # f-string-exception
-    "TRY003",   # long-exception-messages
-]
+line-length = 120
 
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
+skip-magic-trailing-comma = false
+
+[tool.ruff.lint]
+# Start with a curated baseline instead of ALL.
+# E,F: pycodestyle/pyflakes (core correctness)
+# I: import sorting
+# UP: pyupgrade (modernize syntax)
+# B: bugbear (bug-prone patterns)
+# S: bandit (security) -- keep; relax in tests as needed
+# PT: pytest rules
+# NPY, PD: numpy/pandas best practices (great for ML code)
+# C4: comprehensions (readability)
+# SIM: code simplifications
+# RUF: ruff-specific rules (includes useful fixes)
+# PERF: perf-oriented suggestions
+select = [
+    "E", "F", "I", "UP", "B", "S", "PT",
+    "NPY", "PD", "C4", "SIM", "RUF", "PERF",
+]
+ignore = [
+    "E721"
+]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**/*.py" = [
-    "PLC0415",  # Import outside top-level (tests often need scoped imports)
-    "PLR2004",  # Magic values
-    "F841",     # Unused variable (fixtures, etc.)
-    "PT001",    # Use @pytest.fixture() over @pytest.fixture
-    "S101",     # Use of assert detected
-    "D101",     # Missing docstring in public class
-    "D103",     # Missing docstring in public function
-    "E741",     # Ambiguous variable name 'l', 'O', or 'I'
+"**/__init__.py" = ["F401"]  # ignore unused imports in __init__.py files
+"tests/**" = [
+    "NPY002", # numpy-legacy-random (NPY002)
+    "PT006", # pytest-parametrize-names-wrong-type (PT006)
+    "S101", # assert (S101)
+    "S603", # subprocess-without-shell-equals-true (S603)
+    "S105", # hardcoded-password-string (S105)
+    "S202", # tarfile-unsafe-members (S202)
+]
+"tasks.py" = [
+    "PT028", # pytest-parameter-with-default-argument (PT028)
 ]
 
-
-[tool.ty]
-terminal.output-format = "full"
-
-[tool.ty.environment]
-python = ".venv"
-
-[tool.ty.src]
-include = ["src/**/*.py"]
-
-[tool.coverage.report]
-skip_empty = true
-show_missing = true
-fail_under = 100
-exclude_also = [
-    "if __name__ == .__main__.:",
-]
-
-[tool.coverage.run]
-branch = true
-source = ["src"]
-omit = ["_*.py", "__*.py"]
-
-[tool.pytest.ini_options]
-addopts = ["-ra", "--strict-markers", "--strict-config"]
-testpaths = ["tests"]
-pythonpath = ["src"]
-timeout = 60
-
-[tool.semantic_release]
-version_toml = ["pyproject.toml:project.version"]
-commit_author = "github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>"
-commit_parser = "angular"
-tag_format = "v{version}"
-branch = "main"
+[tool.ruff.lint.pydocstyle]
+convention = "google"
