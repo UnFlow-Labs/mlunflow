@@ -1,132 +1,152 @@
-# :rocket: mlunflow
+# unflow (mlunflow)
 
-A framework for fast and scalabe machine learning experimentation
+`unflow` is a Python framework for reproducible, graph-based machine learning experimentation.
 
-## Setup Dev Environment
+It wraps your training/evaluation functions and builds a **compute graph** of executions where:
 
-Installation is using [UV](https://docs.astral.sh/uv/) to manage everything.
+- each node is a normalized function invocation state
+- each edge is a transformation (arguments and/or procedure source changes)
+- repeated identical calls are de-duplicated
 
-**Step 1**: Create a virtual environment
+This makes it easier to understand *what changed* between runs and to query outcomes across experiment history.
 
-```bash
-uv venv
-```
+## Why unflow
 
-**Step 2**: Activate your new environment
+- Track argument and code changes across iterations
+- Avoid re-running identical experiment states
+- Query states, transformations, shortest paths, and outcomes
+- Run locally by default or in parallel with multiprocessing
+- Persist graph snapshots and outcomes for later inspection
 
-```bash
-# on windows
-.venv\Scripts\activate
+## Installation
 
-# on mac / linux
-source .venv/bin/activate
-```
+### Prerequisites
 
-**Step 3**: Install all the cool dependencies
+- Python `>=3.11,<3.14.1`
+- [uv](https://docs.astral.sh/uv/getting-started/installation/)
+
+### Install dependencies (development)
 
 ```bash
 uv sync
 ```
 
-## Github Repo Setup
-
-To add your new project to its Github repository, firstly make sure you have created a project named **mlunflow** on Github.
-Follow these steps to push your new project.
+### Install as a package
 
 ```bash
-git remote add origin git@github.com:ha2emnomer/mlunflow.git
-git branch -M main
-git push -u origin main
+uv pip install -e .
 ```
 
-## Built-in CLI Commands
+## Quick Start
 
-We've included a bunch of useful CLI commands for common project tasks using [taskipy](https://github.com/taskipy/taskipy).
+```python
+from unflow.core.unflow_core import unflowdecorator
+
+
+@unflowdecorator()
+def train(lr: float = 0.01, epochs: int = 10) -> dict[str, float]:
+   return {"loss": 0.5, "lr": lr, "epochs": float(epochs)}
+
+
+print(train(lr=0.01, epochs=10))
+print(train(lr=0.01, epochs=10))  # duplicate state -> not re-executed
+print(train(lr=0.02, epochs=10))
+
+print("states:", train.graph_size())
+print("outcomes:", train.get_outcomes())
+```
+
+Run it with:
 
 ```bash
-# run src/unflow/unflow.py
-task run
-
-# run all tests
-task tests
-
-# run test coverage and generate report
-task coverage
-
-# typechecking with Ty
-task type
-
-# ruff linting
-task lint
-
-# format with ruff
-task format
-
-# build/serve docs
-task docs
-task serve
+uv run python examples/simple_example.py
 ```
 
-## Docker Setup
+## Core API
 
-A Dockerfile optimized to reduce the image size has been included. To get it up and running follow these steps.
+Decorated functions expose helpers for experiment graph operations:
 
-**Step 1**: Build your Docker image.
+- `run_multiple(combinations)`
+- `clear_graph()`
+- `graph_size()`
+- `get_outcomes()`
+- `query_states(...)`
+- `query_transformations(...)`
+- `query_with_outcomes(...)`
+- `shortest_path(from_state, to_state)`
+
+## Execution Modes
+
+- **LocalExecutor** (default): in-process execution
+- **MultiprocessingExecutor**: parallel execution with process pool
+
+Multiprocessing example:
+
+```python
+from unflow.core.executors.multiprocessing_executor import MultiprocessingExecutor
+from unflow.core.unflow_core import unflowdecorator
+
+
+@unflowdecorator(executor=MultiprocessingExecutor(max_workers=4))
+def train(lr: float, epochs: int) -> dict[str, float]:
+   return {"score": lr * epochs}
+```
+
+See runnable scripts in [examples/](examples).
+
+## Documentation
+
+Project docs are in [docs/](docs) and include:
+
+- [Getting Started](docs/getting-started.md)
+- [Concepts](docs/concepts.md)
+- [Examples](docs/how-to/examples.md)
+- [Local and Parallel Execution](docs/how-to/local-and-parallel.md)
+- [API Reference](docs/api/index.md)
+
+Build and serve locally:
 
 ```bash
-task dbuild
+uv run mkdocs serve
 ```
 
-**Step 2**: Run your new image.
+Build static docs:
 
 ```bash
-task drun
+uv run mkdocs build --strict
 ```
 
-## PyPI Deployment
+## Development
 
-This project uses [Trusted Publishing](https://docs.pypi.org/trusted-publishers/) — no API tokens required.
-
-1. On [PyPI](https://pypi.org/), open your project's settings and add a trusted publisher for this repository:
-   - Workflow name: `pypi-publish.yml`
-   - Environment: `pypi`
-   - Repository: `<owner>/mlunflow`
-2. Push commits to `main` — [python-semantic-release](https://python-semantic-release.readthedocs.io/) bumps the version, updates the changelog, and creates a `v*.*.*` tag automatically.
-3. The tag triggers the publish workflow, which builds the package, generates [PEP 740 attestations](https://peps.python.org/pep-0740/), and uploads to PyPI.
-
-## Docs Generation + Publishing
-
-Documentation is built with [Zensical](https://zensical.org/docs/) — a modern, actively maintained drop-in replacement for MkDocs Material.
-
-Doc generation scans everything inside `/src`, files with a prefix `_` will be ignored. Basic doc functions for generating and serving can be done through these CLI commands:
+Common commands:
 
 ```bash
-# build docs (outputs to ./site/)
-task docs
+# tests
+uv run pytest
 
-# serve docs locally
- task serve
+# formatting and linting
+uv run ruff format
+uv run ruff check .
+
+# type checks
+uv run mypy unflow/
 ```
 
-Publishing to GitHub Pages is automatic: every push to `main` runs the `.github/workflows/docs.yml` workflow, which builds and deploys the site.
+If you use Invoke tasks (`tasks.py`):
 
-Note: Your repo must be public or have an upgraded account to deploy docs to Github Pages.
+```bash
+uv run invoke format
+uv run invoke static-analysis
+uv run invoke test
+```
 
-## Dependabot Setup
+## Repository Layout
 
-1. Go to the "Settings -> Advanced Security" tab in your repository.
-2. Under the "Dependabot" section enable the options you want to monitor, we recommend the "Dependabot security updates" at the minimum.
-
-Dependabot is configured to do _weekly_ scans of your dependencies, and pull requests will be prefixed with "DBOT". These settings can be adjusted in the `./.github/dependabot.yml` file.
-
-## References
-
-- [Pattern](https://github.com/wyattferguson/pattern) - A modern cookiecutter template for your next Python project.
+- `src/unflow/` — package source
+- `tests/` — test suite
+- `examples/` — runnable examples from simple to end-to-end ML workflows
+- `docs/` — MkDocs content
 
 ## License
 
 Apache-2.0
-
-## Contact
-
-Created by [Hazem](https://github.com/ha2emnomer)
