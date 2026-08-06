@@ -11,6 +11,7 @@ nav:
   - Getting Started: getting-started.md
   - Concepts: concepts.md
   - How-To:
+      - Examples: how-to/examples.md
       - Local and Parallel Execution: how-to/local-and-parallel.md
   - API Reference:
       - Overview: api/index.md

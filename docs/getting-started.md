@@ -47,5 +47,6 @@ uv run mkdocs build --strict
 ## Next Steps
 
 - Learn the graph model in [Concepts](concepts.md)
+- Explore runnable scripts in [Examples](how-to/examples.md)
 - See local vs parallel executors in [Local and Parallel Execution](how-to/local-and-parallel.md)
 - Explore all symbols in [API Reference](api/index.md)

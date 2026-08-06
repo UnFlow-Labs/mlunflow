@@ -36,5 +36,13 @@ records = train.run_multiple(
 ## Read Next
 
 - Start with [Getting Started](getting-started.md)
+- Pick a runnable path in [Examples](how-to/examples.md)
 - Learn the model in [Concepts](concepts.md)
 - Browse all modules in [API Reference](api/index.md)
+
+## Which Example First
+
+- Start with `examples/simple_example.py` for state tracking basics
+- Use `examples/code_changes.py` for procedure diff behavior
+- Use `examples/datadict_changes.py` for nested config argument diffs
+- Use `examples/multiprocessing_example.py` for parallel execution

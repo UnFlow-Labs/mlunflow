@@ -1,5 +1,7 @@
 # Local and Parallel Execution
 
+For complete runnable scripts (including graph and outcome inspection), see [Examples](examples.md).
+
 ## Local Execution (Default)
 
 ```python
@@ -13,6 +15,8 @@ def train(lr: float) -> dict[str, float]:
 
 result = train(lr=0.01)
 ```
+
+Runnable script: `examples/simple_example.py`
 
 ## Parallel Execution (Multiprocessing)
 
@@ -34,6 +38,8 @@ records = train.run_multiple(
     ]
 )
 ```
+
+Runnable script: `examples/multiprocessing_example.py`
 
 ## Querying the Graph
 
