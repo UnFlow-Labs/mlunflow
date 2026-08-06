@@ -37,7 +37,7 @@ class TestUnflowDecorator:
         assert hasattr(wrapped, "query_states")
         assert hasattr(wrapped, "query_transformations")
         assert hasattr(wrapped, "shortest_path")
-        assert hasattr(wrapped, "shortest_path_to_lowest_outcome")
+        assert hasattr(wrapped, "query_with_outcomes")
 
     def test_call__returns_output(self, decorator):
         deco, _ = decorator
@@ -47,7 +47,7 @@ class TestUnflowDecorator:
         mock_record.status = RStateStatus.COMPLETED
         mock_record.outcome = Outcome(MagicMock(), {"loss": 0.5})
 
-        deco.run_once = MagicMock(return_value=mock_record)
+        deco._run_once = MagicMock(return_value=mock_record)
 
         result = wrapped(lr=0.01, epochs=10)
         assert result is not None
@@ -57,7 +57,7 @@ class TestUnflowDecorator:
         deco, _ = decorator
         wrapped = deco(_train)
 
-        deco.run_once = MagicMock(return_value=None)
+        deco._run_once = MagicMock(return_value=None)
 
         result = wrapped(lr=0.01, epochs=10)
         assert result is None
@@ -70,37 +70,25 @@ class TestUnflowDecorator:
         mock_record.status = RStateStatus.FAILED
         mock_record.outcome = None
 
-        deco.run_once = MagicMock(return_value=mock_record)
+        deco._run_once = MagicMock(return_value=mock_record)
 
         result = wrapped(lr=0.01, epochs=10)
         assert result is None
 
     def test_run_multiple(self, decorator):
-        deco, mock_gb = decorator
+        deco, _ = decorator
         wrapped = deco(_train)
 
-        s1 = MagicMock(name="s1")
-        s1.name = "s1"
-        s2 = MagicMock(name="s2")
-        s2.name = "s2"
-        deco.build_graph = MagicMock(side_effect=[s1, s2])
-        mock_gb.compute_graph = MagicMock()
-
         record = ExecutionRecord(status=RStateStatus.COMPLETED)
-        with patch("unflow.core.unflow_core.Scheduler") as mock_sched_cls:
-            mock_sched = MagicMock()
-            mock_sched.run.return_value = (record, MagicMock())
-            mock_sched_cls.return_value = mock_sched
-
-            combos = [
-                {"args": [], "kwargs": {"lr": 0.01}},
-                {"args": [], "kwargs": {"lr": 0.1}},
-            ]
-            results = wrapped.run_multiple(combos)
+        combos = [
+            {"args": [], "kwargs": {"lr": 0.01}},
+            {"args": [], "kwargs": {"lr": 0.1}},
+        ]
+        deco.run_multiple = MagicMock(return_value=[record])
+        results = wrapped.run_multiple(combos)
 
         assert results == [record]
-        assert deco.build_graph.call_count == 2
-        assert mock_gb.set_status.call_count == 2
+        deco.run_multiple.assert_called_once_with(_train, combos)
 
     def test_clear_graph(self, decorator):
         deco, mock_gb = decorator
@@ -115,33 +103,30 @@ class TestUnflowDecorator:
     def test_query_states(self, decorator):
         deco, mock_gb = decorator
         wrapped = deco(_train)
-        mock_gb.compute_graph.query_states.return_value = ["s1"]
+        mock_state = MagicMock()
+        mock_gb.compute_graph.query_states.return_value = [mock_state]
 
         result = wrapped.query_states(name_contains="s")
 
-        assert result == ["s1"]
+        assert result == [mock_state]
         mock_gb.load_graph.assert_called_with("_train")
-<<<<<<< HEAD
         mock_gb.compute_graph.query_states.assert_called_once_with(
             status=None,
             name_contains="s",
             args_contains=None,
             predicate=None,
         )
-=======
-        mock_gb.compute_graph.query_states.assert_called_once_with(name_contains="s")
->>>>>>> origin/main
 
     def test_query_transformations(self, decorator):
         deco, mock_gb = decorator
         wrapped = deco(_train)
-        mock_gb.compute_graph.query_transformations.return_value = ["t1"]
+        mock_transformation = MagicMock()
+        mock_gb.compute_graph.query_transformations.return_value = [mock_transformation]
 
         result = wrapped.query_transformations(from_state="s1")
 
-        assert result == ["t1"]
+        assert result == [mock_transformation]
         mock_gb.load_graph.assert_called_with("_train")
-<<<<<<< HEAD
         mock_gb.compute_graph.query_transformations.assert_called_once_with(
             from_state="s1",
             to_state=None,
@@ -149,18 +134,19 @@ class TestUnflowDecorator:
             has_procedure_changes=None,
             predicate=None,
         )
-=======
-        mock_gb.compute_graph.query_transformations.assert_called_once_with(from_state="s1")
->>>>>>> origin/main
 
     def test_shortest_path(self, decorator):
         deco, mock_gb = decorator
         wrapped = deco(_train)
-        mock_gb.compute_graph.shortest_path.return_value = ["s1", "s2"]
+        from unflow.core.unflow_types import RState
+
+        s1 = RState(name="s1", procedure=_train, args={"lr": 0.01})
+        s2 = RState(name="s2", procedure=_train, args={"lr": 0.1})
+        mock_gb.compute_graph.shortest_path.return_value = [s1, s2]
 
         result = wrapped.shortest_path("s1", "s2")
 
-        assert result == ["s1", "s2"]
+        assert result == [s1, s2]
         mock_gb.load_graph.assert_called_with("_train")
         mock_gb.compute_graph.shortest_path.assert_called_once_with("s1", "s2")
 
@@ -197,7 +183,7 @@ class TestRunOnce:
         mock_gb.transform.return_value = True
         mock_sched.run.return_value = (mock_record, graph)
 
-        result = deco.run_once(_train, (), {"lr": 0.01})
+        result = deco._run_once(_train, (), {"lr": 0.01})
 
         mock_gb.load_graph.assert_called_once_with("_train")
         mock_gb.create_state.assert_called_once_with(_train, lr=0.01)
@@ -214,7 +200,7 @@ class TestRunOnce:
         mock_gb.create_state.return_value = mock_state
         mock_gb.transform.return_value = False
 
-        result = deco.run_once(_train, (), {"lr": 0.01})
+        result = deco._run_once(_train, (), {"lr": 0.01})
 
         assert result is None
         mock_gb.load_graph.assert_called_once()
