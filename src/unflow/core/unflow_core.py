@@ -1,23 +1,31 @@
 '''
 Unflow Core Module
 
-This module provides the core functionality of the Unflow framework, including the unflowdecorator class, which enables graph-based execution of functions, and methods for managing and querying the compute graph.
+This module provides the core functionality of the Unflow framework, 
+including the unflowdecorator class, which enables graph-based execution of functions, 
+and methods for managing and querying the compute graph.
 
-The unflowdecorator class wraps a function to enable graph-based execution, allowing for tracking of execution states, outcomes, and dependencies. It provides methods for running the function with multiple sets of arguments, clearing the compute graph, querying states and transformations, and finding the shortest path between states.
+The unflowdecorator class wraps a function to enable graph-based execution, 
+allowing for tracking of execution states, outcomes, and dependencies. 
+It provides methods for running the function with multiple sets of arguments, 
+clearing the compute graph, querying states and transformations, 
+and finding the shortest path between states.
 
-Overall, this module provides the essential components for building and executing graph-based workflows using the Unflow framework, enabling users to manage and track the execution of functions in a structured and efficient manner.
+Overall, this module provides the essential components for building and 
+executing graph-based workflows using the Unflow framework, 
+enabling users to manage and track the execution of functions in a structured and efficient manner.
 '''
+from collections.abc import Callable
 from functools import wraps
 from logging import getLogger
 from numbers import Number
+from typing import Any
 
 from unflow.core.builder import GraphBuilder
 from unflow.core.executors.executor import Executor
 from unflow.core.executors.local_exectuor import LocalExecutor
 from unflow.core.scheduler import Scheduler
-from unflow.core.unflow_types import RStateStatus, Outcome, RState, ExecutionRecord, Transformation
-from collections.abc import Callable
-from typing import Any
+from unflow.core.unflow_types import ExecutionRecord, Outcome, RState, RStateStatus, Transformation
 
 logger = getLogger(__name__)  # Placeholder for a logger instance, if needed
 
@@ -25,7 +33,8 @@ logger = getLogger(__name__)  # Placeholder for a logger instance, if needed
 class unflowdecorator:
     '''
     A decorator that wraps a function to enable unflow's graph-based execution.
-    With this decorator, the function can be executed in a graph-based manner, allowing for tracking of execution states, outcomes, and dependencies.
+    With this decorator, the function can be executed in a graph-based manner,
+    allowing for tracking of execution states, outcomes, and dependencies.
     It also provides additional methods for managing and querying the compute graph.
 
     Example usage:
@@ -125,7 +134,8 @@ class unflowdecorator:
             func, filter_func=filter_func, **filters
         )
         wrapper.shortest_path = lambda from_state, to_state: self.shortest_path(func, from_state, to_state)
-        wrapper.query_with_outcomes = lambda outcome_filters, **filters: self.query_with_outcomes(func, outcome_filters, **filters)
+        wrapper.query_with_outcomes = lambda outcome_filters, **filters: \
+            self.query_with_outcomes(func, outcome_filters, **filters)
 
         return wrapper
 
@@ -190,14 +200,16 @@ class unflowdecorator:
                     outcomes[node] = outcome
         return outcomes
 
-    def query_with_outcomes(self, func: Callable, outcome_filters: dict[str, Any], states_filter: Callable[[RState], bool] | None = None) -> list[RState]:
+    def query_with_outcomes(self, func: Callable, outcome_filters: dict[str, Any],
+                            states_filter: Callable[[RState], bool] | None = None) -> list[RState]:
         '''
         Queries states in the compute graph based on provided filters and outcome filters.
         
         Args:
             func: The function whose states are to be queried.
             outcome_filters: A dictionary of outcome attributes to filter states by.
-            states_filter: A callable that takes an RState and returns a boolean indicating whether the state should be included.
+            states_filter: A callable that takes an RState 
+            and returns a boolean indicating whether the state should be included.
         Returns:
             A list of states that match the provided filters and outcome filters.
         '''
@@ -233,7 +245,8 @@ class unflowdecorator:
 
         Args:
             func: The function whose states are to be queried.
-            filter_func: A callable that takes an RState and returns a boolean indicating whether the state should be included.
+            filter_func: A callable that takes an RState and 
+            returns a boolean indicating whether the state should be included.
             status: Optional state status to filter by.
             name_contains: Optional substring to match within the state name.
             args_contains: Optional partial args dict to match against state args.
@@ -263,7 +276,8 @@ class unflowdecorator:
 
         Args:
             func: The function whose transformations are to be queried.
-            filter_func: A callable that takes a Transformation and returns a boolean indicating whether the transformation should be included.
+            filter_func: A callable that takes a 
+            Transformation and returns a boolean indicating whether the transformation should be included.
             from_state: Optional source state name to filter transformations.
             to_state: Optional target state name to filter transformations.
             has_args_changes: Optional filter for transformations with args changes.
@@ -333,7 +347,8 @@ class unflowdecorator:
 
         Args:
             func: The function to be executed.
-            combinations: A list of dictionaries, each containing a set of arguments (args and/or kwargs) for the function.
+            combinations: A list of dictionaries, each containing 
+            a set of arguments (args and/or kwargs) for the function.
         Returns:
             A list of records, each containing the outcome and status of the executed states.
         '''

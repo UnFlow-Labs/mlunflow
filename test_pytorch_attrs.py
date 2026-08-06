@@ -2,6 +2,7 @@
 import torch
 import torch.nn as nn
 import torchvision.transforms as transforms
+
 from unflow.core.diff_args import get_args_changes
 
 # Test 1: Same model instance before and after forward pass
@@ -36,7 +37,7 @@ print("\nTest 2 - Model with BatchNorm after forward pass:")
 print(f"Changes detected: {bool(changes)}")
 if changes:
     print(f"Change keys: {list(changes.keys())}")
-    for key, change in changes.items():
+    for key in changes:
         print(f"  {key}")
 
 # Test 3: Let's check what's in vars()

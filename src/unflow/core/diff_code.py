@@ -1,7 +1,6 @@
 import difflib
 
 
-
 def get_procedure_changes(source1: str, source2: str) -> dict[int, str]:
     changes = {}
     if source1 != source2:

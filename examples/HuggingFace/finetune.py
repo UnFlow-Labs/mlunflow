@@ -2,13 +2,14 @@ import evaluate
 import numpy as np
 from datasets import load_dataset
 from transformers import (
-  AutoModelForSequenceClassification,
-  AutoTokenizer,
-  Trainer,
-  TrainingArguments,
-  pipeline,
+    AutoModelForSequenceClassification,
+    AutoTokenizer,
+    Trainer,
+    TrainingArguments,
 )
+
 from unflow.core.unflow_core import unflowdecorator
+
 
 @unflowdecorator()
 def finetune(model_name:str, training_args:TrainingArguments):

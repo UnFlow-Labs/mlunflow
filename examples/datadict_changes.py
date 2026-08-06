@@ -1,5 +1,7 @@
 from pydantic import BaseModel
+
 from unflow.core.unflow_core import unflowdecorator
+
 
 class DataConfig(BaseModel):
     data_path: str

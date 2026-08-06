@@ -46,7 +46,7 @@ for transformation in changes:
     try:
         source_outcome = outcomes.get(source_state.name).outputs
         target_outcome = outcomes.get(target_state.name).outputs
-    except Exception as e:
+    except Exception:
         # print(f"Error retrieving outcomes for states {source_state.name} and {target_state.name}: {e}")
         continue
     if source_outcome is None or target_outcome is None:
