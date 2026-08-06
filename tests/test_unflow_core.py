@@ -121,12 +121,16 @@ class TestUnflowDecorator:
 
         assert result == ["s1"]
         mock_gb.load_graph.assert_called_with("_train")
+<<<<<<< HEAD
         mock_gb.compute_graph.query_states.assert_called_once_with(
             status=None,
             name_contains="s",
             args_contains=None,
             predicate=None,
         )
+=======
+        mock_gb.compute_graph.query_states.assert_called_once_with(name_contains="s")
+>>>>>>> origin/main
 
     def test_query_transformations(self, decorator):
         deco, mock_gb = decorator
@@ -137,6 +141,7 @@ class TestUnflowDecorator:
 
         assert result == ["t1"]
         mock_gb.load_graph.assert_called_with("_train")
+<<<<<<< HEAD
         mock_gb.compute_graph.query_transformations.assert_called_once_with(
             from_state="s1",
             to_state=None,
@@ -144,6 +149,9 @@ class TestUnflowDecorator:
             has_procedure_changes=None,
             predicate=None,
         )
+=======
+        mock_gb.compute_graph.query_transformations.assert_called_once_with(from_state="s1")
+>>>>>>> origin/main
 
     def test_shortest_path(self, decorator):
         deco, mock_gb = decorator

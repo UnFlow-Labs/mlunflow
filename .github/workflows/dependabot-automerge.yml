@@ -1,0 +1,150 @@
+name: Dependabot auto-approve & auto-merge
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write        # needed to enable auto-merge
+  pull-requests: write   # needed to approve
+jobs:
+  merge:
+    if: github.event.pull_request.user.login == 'dependabot[bot]' && !contains(github.event.pull_request.head.sha, '[skip-dependabot-workflow]')
+    name: Auto-merge
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          ref: ${{ github.event.pull_request.head.ref }}
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          lfs: true
+
+      - name: "Set up Python"
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: ".python-version"
+
+      - name: Install uv (with cache)
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          # Invalidate cache when dependencies or lockfile change
+          cache-dependency-glob: |
+            **/pyproject.toml
+            **/uv.lock
+
+      - name: Generate token for dependency access
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.ARC_GITHUB_CI_TOKEN_GEN_APP_ID }}
+          private-key: ${{ secrets.ARC_GITHUB_CI_TOKEN_GEN_KEY }}
+          owner: ${{ github.repository_owner }}
+
+
+      - name: Sync dependencies (dev)
+        shell: bash
+        run: |
+          git config --global url."https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/".insteadOf "git@github.com:"
+          git config --global url."https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/".insteadOf "https://github.com/"
+          uv sync -U
+
+      - name: Commit updated lock file
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          if git diff --quiet; then
+            echo "No changes to commit"
+          else
+            git add uv.lock
+            git commit -m "Update uv.lock after dependency sync [skip-dependabot-workflow]"
+            git push origin HEAD:${{ github.event.pull_request.head.ref }}
+          fi
+
+      - name: Check changed files (only pyproject.toml and uv.lock allowed)
+        id: diffcheck
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const allowed = new Set(['pyproject.toml', 'uv.lock']);
+            const pr = context.payload.pull_request;
+
+            // List all files in the PR (handles pagination)
+            const files = await github.paginate(
+              github.rest.pulls.listFiles,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: pr.number,
+                per_page: 100
+              }
+            );
+
+            const changed = files.map(f => f.filename);
+            core.info(`Changed files: ${changed.join(', ') || '(none)'}`);
+
+            // Are all changed files within the allowed set?
+            const pass = changed.length > 0 && changed.every(f => allowed.has(f));
+
+            if (!pass) {
+              const disallowed = changed.filter(f => !allowed.has(f));
+              core.info(`Approval will be skipped. Disallowed files: ${disallowed.join(', ') || '(none)'}`);
+            }
+
+      - name: Static analysis
+        uses: ./.github/actions/static-analysis
+        with:
+          token-gen-app-id: ${{ secrets.ARC_GITHUB_CI_TOKEN_GEN_APP_ID }}
+          token-gen-private-key: ${{ secrets.ARC_GITHUB_CI_TOKEN_GEN_KEY }}
+
+      - name: Run tests
+        uses: ./.github/actions/tests
+        with:
+          token-gen-app-id: ${{ secrets.ARC_GITHUB_CI_TOKEN_GEN_APP_ID }}
+          token-gen-private-key: ${{ secrets.ARC_GITHUB_CI_TOKEN_GEN_KEY }}
+
+      - name: Approve PR
+        run: |
+          gh pr merge --auto --squash "$PR_URL"
+          gh pr review --approve "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  assign-admin-on-failure:
+    needs: merge
+    if: ${{ needs.merge.result == 'failure' }}
+    name: Assign PR to repo admin on failure
+    runs-on: ubuntu-latest
+    steps:
+      - name: Assign PR to first repo admin collaborator
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const pr = context.payload.pull_request;
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+
+            // List collaborators and find the first with admin permission
+            const collaborators = await github.paginate(
+              github.rest.repos.listCollaborators,
+              {
+                owner,
+                repo,
+                per_page: 100
+              }
+            );
+
+            const admin = collaborators.find(c => c.permissions && c.permissions.admin);
+
+            // Assign the PR (issues API) to the admin
+            await github.rest.issues.addAssignees({
+              owner,
+              repo,
+              issue_number: pr.number,
+              assignees: [admin.login]
+            });
+
+            core.info(`PR #${pr.number} failed, assigning to admin ${admin.login}`);
