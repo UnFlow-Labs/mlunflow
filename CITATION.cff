@@ -1,0 +1,11 @@
+cff-version: 1.2.0
+message: "A framework for fast and scalabe machine learning experimentation"
+title: "mlunflow"
+abstract: "A framework for fast and scalabe machine learning experimentation"
+authors:
+  - name: "Hazem"
+version: 0.1.0
+license: "Apache-2.0"
+repository-code: "https://github.com/ha2emnomer/mlunflow"
+keywords:
+  - "python"

@@ -1,0 +1,36 @@
+site_name: mlunflow
+repo_url: https://github.com/ha2emnomer/mlunflow
+site_url: https://ha2emnomer.github.io/mlunflow
+site_description: A framework for fast and scalabe machine learning experimentation
+site_author: Hazem
+repo_name: ha2emnomer/mlunflow
+edit_uri: edit/main/docs/
+copyright: Maintained by <a href="https://github.com/ha2emnomer">Hazem</a>.
+nav:
+  - Home: index.md
+  - Getting Started: getting-started.md
+  - License: license.md
+theme:
+  name: material
+  palette:
+    scheme: slate
+    primary: deep purple
+    accent: purple
+  icon:
+    repo: fontawesome/brands/github
+plugins:
+  - search
+  - gh-admonitions
+  - minify:
+      minify_html: true
+      htmlmin_opts:
+        remove_comments: true
+markdown_extensions:
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      use_pygments: true
+      pygments_style: material
+      noclasses: true
+  - pymdownx.inlinehilite
+  - pymdownx.emoji
+  - admonition
