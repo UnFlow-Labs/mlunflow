@@ -1,7 +1,7 @@
 from time import time
 
-from unflow.core.executors.executor import Executor
-from unflow.core.unflow_types import Job, RState
+from ...core.executors.executor import Executor
+from ...core.unflow_types import Job, RState
 
 
 class LocalExecutor(Executor):

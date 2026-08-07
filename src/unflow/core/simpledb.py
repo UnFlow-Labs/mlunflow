@@ -2,7 +2,7 @@
 import sqlite3
 from pathlib import Path
 
-from unflow.core.constants import (
+from ..core.constants import (
     DB_PATH,
     EXECUTION_RECORD_TABLE_CREATE_QUERY,
     INSERT_EXECUTION_RECORD_QUERY,

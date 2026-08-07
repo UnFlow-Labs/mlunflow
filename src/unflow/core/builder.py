@@ -3,9 +3,9 @@ import json
 
 from networkx import DiGraph
 
-from unflow.core.simpledb import DB
-from unflow.core.unflow_types import ExecutionRecord, Outcome, RState, RStateStatus, Transformation
-from unflow.graph.compute_graph import ComputeGraph
+from ..core.simpledb import DB
+from ..core.unflow_types import ExecutionRecord, Outcome, RState, RStateStatus, Transformation
+from ..graph.compute_graph import ComputeGraph
 
 
 class GraphBuilder:

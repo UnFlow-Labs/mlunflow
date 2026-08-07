@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import networkx as nx
 
-from unflow.core.executors.executor import Executor
-from unflow.core.unflow_types import ExecutionRecord, Job, Outcome, RState, RStateStatus
-from unflow.graph.compute_graph import ComputeGraph
+from ..core.executors.executor import Executor
+from ..core.unflow_types import ExecutionRecord, Job, Outcome, RState, RStateStatus
+from ..graph.compute_graph import ComputeGraph
 
 
 class Scheduler:

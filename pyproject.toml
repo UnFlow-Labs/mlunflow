@@ -15,15 +15,6 @@ dependencies = [
      "orjson",
      "pydantic",
      "numpy",
-     "torch",
-     "torchvision",
-     "datasets",
-     "transformers",
-     "accelerate>=1.1.0",
-     "pip-system-certs",
-     "evaluate",
-     "scikit-learn",
-     "twine>=7.0.0",
 ]
 version = "0.0.1"
 
@@ -44,6 +35,15 @@ dev = [
     "taskipy>=1.14.1",
     "typeguard>=4.4.4",
     "vulture>=2.14",
+     "torch",
+     "torchvision",
+     "datasets",
+     "transformers",
+     "evaluate",
+     "scikit-learn",
+     "twine>=7.0.0",
+      "accelerate>=1.1.0",
+     "pip-system-certs",
 ]
 
 [project.scripts]
@@ -73,7 +73,7 @@ skip_empty = true
 fail_under = 80
 
 [tool.deptry]
-extend_exclude = ["tasks\\.py"]
+extend_exclude = ["tasks\\.py", "examples/.*"]
 
 [tool.mypy]
 ignore_missing_imports = true

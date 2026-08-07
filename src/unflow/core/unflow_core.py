@@ -22,11 +22,11 @@ from logging import getLogger
 from numbers import Number
 from typing import Any
 
-from unflow.core.builder import GraphBuilder
-from unflow.core.executors.executor import Executor
-from unflow.core.executors.local_exectuor import LocalExecutor
-from unflow.core.scheduler import Scheduler
-from unflow.core.unflow_types import ExecutionRecord, Outcome, RState, RStateStatus, Transformation
+from ..core.builder import GraphBuilder
+from ..core.executors.executor import Executor
+from ..core.executors.local_exectuor import LocalExecutor
+from ..core.scheduler import Scheduler
+from ..core.unflow_types import ExecutionRecord, Outcome, RState, RStateStatus, Transformation
 
 logger = getLogger(__name__)  # Placeholder for a logger instance, if needed
 
@@ -40,7 +40,7 @@ class unflowdecorator:
 
     Example usage:
     ```python
-    from unflow.core.unflow_core import unflowdecorator
+    from ..core.unflow_core import unflowdecorator
 
     @unflowdecorator()
     def my_function(x, y):
@@ -90,7 +90,7 @@ class unflowdecorator:
     def set_execution_path(self, execution_path: str):
         self.graph_builder.set_execution_path(execution_path)
 
-    def __call__(self, func: Callable) -> Callable:
+    def __call__(self, func):
         """
         Wraps the function to enable unflow's graph-based execution.
 

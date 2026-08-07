@@ -105,7 +105,7 @@ def format(c):
 @task
 def static_analysis(c):
     """Run static analysis."""
-    c.run("uv run mypy unflow/")
+    c.run("uv run mypy src/unflow/")
     with Path("pyproject.toml").open("rb") as f:
         try:
             toml_ignores = tomllib.load(f)["tool"]["deptry"]["per_rule_ignores"]
@@ -144,7 +144,7 @@ def update(c):
 @task
 def show_unused(c):
     """Show unused code using vulture."""
-    c.run("uv run vulture unflow/")
+    c.run("uv run vulture src/unflow/")
 
 
 def has_merge_conflicts(c):

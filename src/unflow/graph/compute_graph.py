@@ -4,8 +4,8 @@ import networkx as nx
 import orjson
 from networkx.readwrite import json_graph
 
-from unflow.core.json_encoder import dumps
-from unflow.core.unflow_types import RState, RStateStatus, Transformation
+from ..core.json_encoder import dumps
+from ..core.unflow_types import RState, RStateStatus, Transformation
 
 
 class ComputeGraph:

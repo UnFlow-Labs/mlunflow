@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 import deepdiff
 from orderly_set import OrderedSet
 
-from unflow.core.change_types import ArgTypeChangeFactory, ArgTypeChangeType, ArgValueChangeFactory, ArgValueChangeType
+from ..core.change_types import ArgTypeChangeFactory, ArgTypeChangeType, ArgValueChangeFactory, ArgValueChangeType
 
 if TYPE_CHECKING:
     pass
@@ -65,7 +65,7 @@ def _to_comparable(value: Any) -> Any:
         return {_to_comparable(item) for item in value}
     if isinstance(value, Enum):
         return value.value
-    if is_dataclass(value):
+    if is_dataclass(value) and not isinstance(value, type):
         return _to_comparable(asdict(value))
     if hasattr(value, "model_dump") and callable(value.model_dump):
         return _to_comparable(value.model_dump())

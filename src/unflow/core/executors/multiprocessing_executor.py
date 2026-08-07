@@ -7,8 +7,8 @@ from collections import deque
 
 import cloudpickle
 
-from unflow.core.executors.executor import Executor
-from unflow.core.unflow_types import Job, RState
+from ...core.executors.executor import Executor
+from ...core.unflow_types import Job, RState
 
 
 def _resolve_context():
