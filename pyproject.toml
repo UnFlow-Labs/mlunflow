@@ -8,23 +8,24 @@ authors = [
 requires-python = ">=3.11,<3.14.1"
 dependencies = [
      "networkx>=3.6.1",
-    "deepdiff>=9.1.0",
-    "cloudpickle>=3.1.2",
-    # only if you directly import it
-    "orderly_set>=5.5.0",
-    "orjson",
-    "pydantic",
-    "numpy",
-    "torch",
-    "torchvision",
-    "datasets",
-    "transformers",
-    "accelerate>=1.1.0",
-    " pip-system-certs",
-    "evaluate",
-    "scikit-learn"
+     "deepdiff>=9.1.0",
+     "cloudpickle>=3.1.2",
+     # only if you directly import it
+     "orderly_set>=5.5.0",
+     "orjson",
+     "pydantic",
+     "numpy",
+     "torch",
+     "torchvision",
+     "datasets",
+     "transformers",
+     "accelerate>=1.1.0",
+     "pip-system-certs",
+     "evaluate",
+     "scikit-learn",
+     "twine>=7.0.0",
 ]
-version = "0.0.0"
+version = "0.0.1"
 
 [dependency-groups]
 dev = [
