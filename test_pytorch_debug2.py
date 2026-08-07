@@ -1,4 +1,5 @@
 """Test comparing two separately created models with hooks"""
+
 import torch.nn as nn
 
 from unflow.core.diff_args import _to_comparable, get_args_changes
@@ -7,9 +8,11 @@ from unflow.core.diff_args import _to_comparable, get_args_changes
 model1 = nn.Linear(10, 5)
 model2 = nn.Linear(10, 5)
 
+
 # Register the same hook on both
 def dummy_hook(module, input, output):
     return output
+
 
 model1.register_forward_hook(dummy_hook)
 model2.register_forward_hook(dummy_hook)

@@ -1,4 +1,5 @@
 """Test to demonstrate the PyTorch attributes issue with model mutation"""
+
 import torch
 import torch.nn as nn
 import torchvision.transforms as transforms
@@ -21,10 +22,7 @@ if changes:
     print(f"Change keys: {list(changes.keys())}")
 
 # Test 2: With BatchNorm (which has running stats that change)
-model_bn = nn.Sequential(
-    nn.Linear(10, 5),
-    nn.BatchNorm1d(5)
-)
+model_bn = nn.Sequential(nn.Linear(10, 5), nn.BatchNorm1d(5))
 model_bn.train()
 
 args1 = {"model": model_bn, "lr": 0.001}

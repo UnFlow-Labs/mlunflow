@@ -59,10 +59,11 @@ class CodeChangeType(ChangeType):
     from_code: str | None = None
     to_code: str | None = None
 
+
 def normalize_arg_name(arg_name: str) -> str:
     """
     Normalize the argument name by removing any leading or trailing whitespace,
-    removing underscores, and converting to lowercase. 
+    removing underscores, and converting to lowercase.
     This ensures that argument names are consistent and can be compared accurately.
 
     Args:
@@ -71,6 +72,7 @@ def normalize_arg_name(arg_name: str) -> str:
         str: The normalized argument name.
     """
     return arg_name.strip().replace("_", "").lower() if isinstance(arg_name, str) else arg_name
+
 
 def get_full_arg_name(parents: list[str], arg_name: str) -> str:
     """
@@ -85,8 +87,10 @@ def get_full_arg_name(parents: list[str], arg_name: str) -> str:
     """
     return ".".join([*parents, arg_name]) if parents else arg_name
 
-def ArgValueChangeFactory(arg_name: str, parents:list[str], 
-                          from_value: Any | None, to_value: Any | None) -> ArgValueChangeType:
+
+def ArgValueChangeFactory(
+    arg_name: str, parents: list[str], from_value: Any | None, to_value: Any | None
+) -> ArgValueChangeType:
     """
     Factory function to create an instance of ArgValueChangeType.
 
@@ -106,8 +110,11 @@ def ArgValueChangeFactory(arg_name: str, parents:list[str],
         from_value=from_value,
         to_value=to_value,
     )
-def ArgTypeChangeFactory(arg_name: str, parents:list[str], 
-                         from_type: type | None, to_type: type | None) -> ArgTypeChangeType:
+
+
+def ArgTypeChangeFactory(
+    arg_name: str, parents: list[str], from_type: type | None, to_type: type | None
+) -> ArgTypeChangeType:
     """
     Factory function to create an instance of ArgTypeChangeType.
 
@@ -127,6 +134,8 @@ def ArgTypeChangeFactory(arg_name: str, parents:list[str],
         from_type=from_type,
         to_type=to_type,
     )
+
+
 def CodeChangeFactory(from_code: str | None, to_code: str | None) -> CodeChangeType:
     """
     Factory function to create an instance of CodeChangeType.

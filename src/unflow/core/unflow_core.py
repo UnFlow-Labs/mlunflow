@@ -1,20 +1,21 @@
-'''
+"""
 Unflow Core Module
 
-This module provides the core functionality of the Unflow framework, 
-including the unflowdecorator class, which enables graph-based execution of functions, 
+This module provides the core functionality of the Unflow framework,
+including the unflowdecorator class, which enables graph-based execution of functions,
 and methods for managing and querying the compute graph.
 
-The unflowdecorator class wraps a function to enable graph-based execution, 
-allowing for tracking of execution states, outcomes, and dependencies. 
-It provides methods for running the function with multiple sets of arguments, 
-clearing the compute graph, querying states and transformations, 
+The unflowdecorator class wraps a function to enable graph-based execution,
+allowing for tracking of execution states, outcomes, and dependencies.
+It provides methods for running the function with multiple sets of arguments,
+clearing the compute graph, querying states and transformations,
 and finding the shortest path between states.
 
-Overall, this module provides the essential components for building and 
-executing graph-based workflows using the Unflow framework, 
+Overall, this module provides the essential components for building and
+executing graph-based workflows using the Unflow framework,
 enabling users to manage and track the execution of functions in a structured and efficient manner.
-'''
+"""
+
 from collections.abc import Callable
 from functools import wraps
 from logging import getLogger
@@ -31,7 +32,7 @@ logger = getLogger(__name__)  # Placeholder for a logger instance, if needed
 
 
 class unflowdecorator:
-    '''
+    """
     A decorator that wraps a function to enable unflow's graph-based execution.
     With this decorator, the function can be executed in a graph-based manner,
     allowing for tracking of execution states, outcomes, and dependencies.
@@ -67,7 +68,8 @@ class unflowdecorator:
         filter_func=lambda t: t.state1.args.get("y") == t.state2.args.get("y")
     )
     ```
-    '''
+    """
+
     def __init__(self, executor: Executor | None = None):
         """
         A decorator that wraps a function to enable unflow's graph-based execution.
@@ -89,8 +91,7 @@ class unflowdecorator:
         self.graph_builder.set_execution_path(execution_path)
 
     def __call__(self, func: Callable) -> Callable:
-
-        '''
+        """
         Wraps the function to enable unflow's graph-based execution.
 
         The wrapped function will build the compute graph and execute the function when called.
@@ -112,7 +113,7 @@ class unflowdecorator:
 
         Returns:
             The wrapped function.
-        '''
+        """
 
         @wraps(func)
         def wrapper(*args, **kwargs):
@@ -134,33 +135,34 @@ class unflowdecorator:
             func, filter_func=filter_func, **filters
         )
         wrapper.shortest_path = lambda from_state, to_state: self.shortest_path(func, from_state, to_state)
-        wrapper.query_with_outcomes = lambda outcome_filters, **filters: \
-            self.query_with_outcomes(func, outcome_filters, **filters)
+        wrapper.query_with_outcomes = lambda outcome_filters, **filters: self.query_with_outcomes(
+            func, outcome_filters, **filters
+        )
 
         return wrapper
 
     def clear_graph(self, func: Callable):
-        '''
+        """
         Clears the compute graph and resets the execution path.
 
         Args:
             func: The function whose graph is to be cleared.
-        '''
+        """
         self.graph_builder.compute_graph.clear()
         # get the execution path from the caller's frame
         self.set_execution_path(self.get_execution_path(func))
         self.graph_builder.db.clear_graph(func.__name__, self.graph_builder.compute_graph.execution_path)
 
     def _build_graph(self, func: Callable, *args, **kwargs):
-        '''
+        """
         Builds the compute graph for the given function and its arguments.
-        
+
         Args:
             func: The function for which the graph is to be built.
             *args: Positional arguments for the function.
             **kwargs: Keyword arguments for the function.
         Returns:
-            The new state created in the graph, or None if no new state was created.'''
+            The new state created in the graph, or None if no new state was created."""
         self.set_execution_path(self.get_execution_path(func))
         self.graph_builder.load_graph(func.__name__)
         new_state = self.graph_builder.create_state(func, *args, **kwargs)
@@ -181,14 +183,14 @@ class unflowdecorator:
         return record
 
     def get_outcomes(self, func: Callable) -> dict[str, Outcome]:
-        '''
+        """
         Retrieves the outcomes of all executed states for the given function.
-        
+
         Args:
             func: The function whose outcomes are to be retrieved.
         Returns:
             A dictionary mapping state names to their corresponding outcomes.
-        '''
+        """
         self.set_execution_path(self.get_execution_path(func))
         self.graph_builder.load_graph(func.__name__)
         outcomes = {}
@@ -200,19 +202,20 @@ class unflowdecorator:
                     outcomes[node] = outcome
         return outcomes
 
-    def query_with_outcomes(self, func: Callable, outcome_filters: dict[str, Any],
-                            states_filter: Callable[[RState], bool] | None = None) -> list[RState]:
-        '''
+    def query_with_outcomes(
+        self, func: Callable, outcome_filters: dict[str, Any], states_filter: Callable[[RState], bool] | None = None
+    ) -> list[RState]:
+        """
         Queries states in the compute graph based on provided filters and outcome filters.
-        
+
         Args:
             func: The function whose states are to be queried.
             outcome_filters: A dictionary of outcome attributes to filter states by.
-            states_filter: A callable that takes an RState 
+            states_filter: A callable that takes an RState
             and returns a boolean indicating whether the state should be included.
         Returns:
             A list of states that match the provided filters and outcome filters.
-        '''
+        """
         self.set_execution_path(self.get_execution_path(func))
         self.graph_builder.load_graph(func.__name__)
         states = self.graph_builder.compute_graph.query_states(predicate=states_filter)
@@ -240,19 +243,19 @@ class unflowdecorator:
         name_contains: str | None = None,
         args_contains: dict | None = None,
     ) -> list[RState]:
-        '''
+        """
         Queries states in the compute graph based on provided filters.
 
         Args:
             func: The function whose states are to be queried.
-            filter_func: A callable that takes an RState and 
+            filter_func: A callable that takes an RState and
             returns a boolean indicating whether the state should be included.
             status: Optional state status to filter by.
             name_contains: Optional substring to match within the state name.
             args_contains: Optional partial args dict to match against state args.
         Returns:
             A list of states that match the provided filters.
-        '''
+        """
         self.set_execution_path(self.get_execution_path(func))
         self.graph_builder.load_graph(func.__name__)
         return self.graph_builder.compute_graph.query_states(
@@ -271,12 +274,12 @@ class unflowdecorator:
         has_args_changes: bool | None = None,
         has_procedure_changes: bool | None = None,
     ) -> list[Transformation]:
-        '''
+        """
         Queries transformations in the compute graph based on provided filters.
 
         Args:
             func: The function whose transformations are to be queried.
-            filter_func: A callable that takes a 
+            filter_func: A callable that takes a
             Transformation and returns a boolean indicating whether the transformation should be included.
             from_state: Optional source state name to filter transformations.
             to_state: Optional target state name to filter transformations.
@@ -284,7 +287,7 @@ class unflowdecorator:
             has_procedure_changes: Optional filter for transformations with procedure/source changes.
         Returns:
             A list of transformations that match the provided filters.
-        '''
+        """
         self.set_execution_path(self.get_execution_path(func))
         self.graph_builder.load_graph(func.__name__)
         return self.graph_builder.compute_graph.query_transformations(
@@ -296,7 +299,7 @@ class unflowdecorator:
         )
 
     def shortest_path(self, func: Callable, from_state: str, to_state: str) -> list[RState]:
-        '''
+        """
         Finds the shortest path between two states in the compute graph.
         Args:
             func: The function whose graph is to be queried.
@@ -304,13 +307,13 @@ class unflowdecorator:
             to_state: The name of the target state.
         Returns:
             A list of state names representing the shortest path from from_state to to_state.
-        '''
+        """
         self.set_execution_path(self.get_execution_path(func))
         self.graph_builder.load_graph(func.__name__)
         return self.graph_builder.compute_graph.shortest_path(from_state, to_state)
 
     def _extract_outcome_score(self, outputs: Any, output_key: str | None = None, scorer: Any = None) -> Number:
-        '''
+        """
         Extracts a numeric score from the outcome outputs based on the provided output_key or scorer function.
 
         Args:
@@ -319,9 +322,9 @@ class unflowdecorator:
             scorer: A custom function to compute the score from the outputs.
         Returns:
             The extracted numeric score.
-        '''
+        """
         if scorer is not None:
-            score = scorer(outputs) 
+            score = scorer(outputs)
             if not isinstance(score, Number):
                 raise ValueError("scorer must return a numeric value")
             return score
@@ -341,17 +344,17 @@ class unflowdecorator:
         return outputs
 
     def run_multiple(self, func: Callable, combinations: list[dict[str, Any]]) -> list[dict[str, ExecutionRecord]]:
-        '''
+        """
         Executes the function with multiple sets of arguments, building the compute graph for each set.
         After building the graph, it runs the scheduler to execute the states and records the outcomes.
 
         Args:
             func: The function to be executed.
-            combinations: A list of dictionaries, each containing 
+            combinations: A list of dictionaries, each containing
             a set of arguments (args and/or kwargs) for the function.
         Returns:
             A list of records, each containing the outcome and status of the executed states.
-        '''
+        """
         results = []
         new_states = []
         for combo in combinations:

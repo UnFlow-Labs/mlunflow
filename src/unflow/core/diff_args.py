@@ -29,28 +29,30 @@ _TOKEN_RE = re.compile(
 
 # PyTorch internal attributes that should be excluded from comparison
 _PYTORCH_INTERNAL_ATTRS = {
-    '_forward_hooks',
-    '_backward_hooks',
-    '_forward_pre_hooks',
-    '_backward_pre_hooks',
-    '_forward_hooks_with_kwargs',
-    '_forward_pre_hooks_with_kwargs',
-    '_backward_pre_hooks_with_kwargs',
-    '_state_dict_hooks',
-    '_state_dict_pre_hooks',
-    '_load_state_dict_pre_hooks',
-    '_load_state_dict_post_hooks',
-    '_forward_hooks_always_called',
-    '_is_full_backward_hook',
-    '_non_persistent_buffers_set',
+    "_forward_hooks",
+    "_backward_hooks",
+    "_forward_pre_hooks",
+    "_backward_pre_hooks",
+    "_forward_hooks_with_kwargs",
+    "_forward_pre_hooks_with_kwargs",
+    "_backward_pre_hooks_with_kwargs",
+    "_state_dict_hooks",
+    "_state_dict_pre_hooks",
+    "_load_state_dict_pre_hooks",
+    "_load_state_dict_post_hooks",
+    "_forward_hooks_always_called",
+    "_is_full_backward_hook",
+    "_non_persistent_buffers_set",
 }
+
 
 def _is_pytorch_module(value: Any) -> bool:
     """Check if value is a PyTorch Module or similar."""
     try:
-        return hasattr(value, '_parameters') and hasattr(value, '_buffers')
+        return hasattr(value, "_parameters") and hasattr(value, "_buffers")
     except Exception:
         return False
+
 
 def _to_comparable(value: Any) -> Any:
     if isinstance(value, dict):
@@ -73,10 +75,7 @@ def _to_comparable(value: Any) -> Any:
         obj_dict = vars(value)
         # Filter out PyTorch internal attributes
         if _is_pytorch_module(value):
-            obj_dict = {
-                k: v for k, v in obj_dict.items() 
-                if k not in _PYTORCH_INTERNAL_ATTRS
-            }
+            obj_dict = {k: v for k, v in obj_dict.items() if k not in _PYTORCH_INTERNAL_ATTRS}
         return _to_comparable(obj_dict)
     return value
 
@@ -93,6 +92,7 @@ def normalize_args(args: dict) -> dict:
         dict: A new dictionary with the same keys but with all values converted to strings.
     """
     return _to_comparable(args)
+
 
 def parse_deepdiff_path(path: str) -> tuple[list[str], str]:
     """
@@ -123,7 +123,7 @@ def parse_deepdiff_path(path: str) -> tuple[list[str], str]:
         raise ValueError(f"Invalid DeepDiff path: {path}")
 
     return [str(token) for token in tokens[:-1]], str(tokens[-1])
-  
+
 
 def get_args_changes(args1: dict, args2: dict) -> dict[str, ArgValueChangeType | ArgTypeChangeType | tuple[Any, Any]]:
     comparable_args1 = normalize_args(args1)
@@ -171,7 +171,7 @@ def get_args_changes(args1: dict, args2: dict) -> dict[str, ArgValueChangeType |
                         parents, arg_name = parse_deepdiff_path(item)
                         arg_name = str(arg_name)
                         parents = [str(parent) for parent in parents]
-                        changes[arg_name] =ArgValueChangeFactory(
+                        changes[arg_name] = ArgValueChangeFactory(
                             arg_name=arg_name,
                             parents=parents,
                             from_value=None,

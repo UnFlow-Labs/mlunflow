@@ -1,4 +1,5 @@
 """Test to see what actually triggers changes in PyTorch objects"""
+
 import torch.nn as nn
 
 from unflow.core.diff_args import get_args_changes
@@ -9,9 +10,11 @@ model = nn.Linear(10, 5)
 args1 = {"model": model}
 print("Initial vars keys:", list(vars(model).keys()))
 
+
 # Register a forward hook
 def dummy_hook(module, input, output):
     return output
+
 
 model.register_forward_hook(dummy_hook)
 
@@ -22,7 +25,7 @@ print("\nAfter registering a hook:")
 print(f"Changes detected: {bool(changes)}")
 if changes:
     print(f"Change keys: {list(changes.keys())}")
-    
+
 # Check the hooks themselves
 print(f"\nInitial _forward_hooks: {args1['model']._forward_hooks}")
 print(f"Current _forward_hooks: {args2['model']._forward_hooks}")

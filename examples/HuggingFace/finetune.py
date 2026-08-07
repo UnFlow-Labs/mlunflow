@@ -12,7 +12,7 @@ from unflow.core.unflow_core import unflowdecorator
 
 
 @unflowdecorator()
-def finetune(model_name:str, training_args:TrainingArguments):
+def finetune(model_name: str, training_args: TrainingArguments):
     # Load the "sms_spam" dataset.
     sms_dataset = load_dataset("ucirvine/sms_spam")
 
@@ -24,17 +24,15 @@ def finetune(model_name:str, training_args:TrainingArguments):
     # Load the tokenizer for "distilbert-base-uncased" model.
     tokenizer = AutoTokenizer.from_pretrained("distilbert-base-uncased")
 
-
     def tokenize_function(examples):
-    # Pad/truncate each text to 512 tokens. Enforcing the same shape
-    # could make the training faster.
+        # Pad/truncate each text to 512 tokens. Enforcing the same shape
+        # could make the training faster.
         return tokenizer(
             examples["sms"],
             padding="max_length",
             truncation=True,
             max_length=128,
         )
-
 
     seed = 22
 
@@ -49,27 +47,31 @@ def finetune(model_name:str, training_args:TrainingArguments):
 
     # Acquire the model from the Hugging Face Hub, providing label and id mappings so that both we and the model can 'speak' the same language.
     model = AutoModelForSequenceClassification.from_pretrained(
-        model_name,num_labels=2,label2id=label2id,id2label=id2label,)
+        model_name,
+        num_labels=2,
+        label2id=label2id,
+        id2label=id2label,
+    )
     metric = evaluate.load("accuracy")
+
     # Define a function for calculating our defined target optimization metric during training
     def compute_metrics(eval_pred):
         logits, labels = eval_pred
         predictions = np.argmax(logits, axis=-1)
         return metric.compute(predictions=predictions, references=labels)
 
-
     # Instantiate a `Trainer` instance that will be used to initiate a training run.
     trainer = Trainer(
-    model=model,
-    args=training_args,
-    train_dataset=train_tokenized,
-    eval_dataset=test_tokenized,
-    compute_metrics=compute_metrics,
+        model=model,
+        args=training_args,
+        train_dataset=train_tokenized,
+        eval_dataset=test_tokenized,
+        compute_metrics=compute_metrics,
     )
     output = trainer.train()
     return {"loss": output.training_loss, "metrics": trainer.evaluate()}
 
-    
+
 training_args = TrainingArguments(
     output_dir="distilbert-finetuned",
     num_train_epochs=3,
@@ -82,7 +84,6 @@ training_args = TrainingArguments(
     eval_strategy="epoch",
     save_strategy="epoch",
     load_best_model_at_end=True,
-
 )
 # finetune.clear_graph()
 # output = finetune("distilbert-base-uncased", training_args)
@@ -119,5 +120,3 @@ for transformation in transformations:
         accuracy_change = output2["metrics"]["eval_accuracy"] - output1["metrics"]["eval_accuracy"]
         print(f"  - Loss change: {loss_change:.4f}")
         print(f"  - Accuracy change: {accuracy_change:.4f}")
-
-    

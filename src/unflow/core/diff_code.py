@@ -18,5 +18,3 @@ def get_procedure_changes(source1: str, source2: str) -> dict[int, str]:
 
 def diff_procedure(source1: str, source2: str) -> bool:
     return bool(get_procedure_changes(source1, source2))
-
-
