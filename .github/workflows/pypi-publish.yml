@@ -101,6 +101,6 @@ jobs:
             dist/*.whl
             dist/*.tar.gz
       - name: Publish package to TestPyPI
-        run: uv publish --index testpypi
+        run: uv publish --publish-url https://test.pypi.org/legacy/
         env:
           UV_PUBLISH_TOKEN: ${{ secrets.TEST_PYPI_API_TOKEN }}
