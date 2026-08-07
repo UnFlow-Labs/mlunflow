@@ -44,6 +44,7 @@ dev = [
      "twine>=7.0.0",
       "accelerate>=1.1.0",
      "pip-system-certs",
+     "zensical"
 ]
 
 [project.scripts]
