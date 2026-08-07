@@ -1,15 +1,10 @@
 name: tests
 description: tests
-inputs:
-  token-gen-app-id:
-    description: App ID for token generation
-    required: true
-  token-gen-private-key:
-    description: Private Key for token generation
-    required: true
+
 runs:
   using: 'composite'
   steps:
+
     - name: "Set up Python"
       uses: actions/setup-python@v5
       with:
@@ -19,24 +14,15 @@ runs:
       uses: astral-sh/setup-uv@v6
       with:
         enable-cache: true
-        # Invalidate cache when dependencies or lockfile change
         cache-dependency-glob: |
           **/pyproject.toml
           **/uv.lock
 
-    - name: Generate token for dependency access
-      id: app-token
-      uses: actions/create-github-app-token@v1
-      with:
-        app-id: ${{ inputs.token-gen-app-id }}
-        private-key: ${{ inputs.token-gen-private-key }}
-        owner: ${{ github.repository_owner }}
-
     - name: Sync dependencies (dev)
       shell: bash
       run: |
-        git config --global url."https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/".insteadOf "git@github.com:"
-        git config --global url."https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/".insteadOf "https://github.com/"
+        git config --global url."https://x-access-token:${{ github.token }}@github.com/".insteadOf "git@github.com:"
+        git config --global url."https://x-access-token:${{ github.token }}@github.com/".insteadOf "https://github.com/"
         uv sync --frozen
 
     - name: Run tests
