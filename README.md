@@ -1,6 +1,6 @@
 # UnFlow
 
-[!UnFlow](https://github.com/UnFlow-Labs/mlunflow/blob/main/UNFLOW.png)
+[!UnFlow](https://ibb.co/9mDPBLw0)
 
 ### Reproducible, graph-based experimentation for machine learning
 
