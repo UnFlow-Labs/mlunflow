@@ -4,14 +4,21 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 import cloudpickle
 
+from .code.context_files import ContextData
+from .code.utils import get_context_changes
+
 from ..core.constants import PICKLE_PATH
 from ..core.diff_args import get_args_changes
-from ..core.diff_code import get_procedure_changes
+from .code.diff_code import get_procedure_changes
 from ..core.json_encoder import dumps
+from ..core.change_types import ArgTypeChangeType, ArgValueChangeType, dict2type 
+
+if TYPE_CHECKING:
+    from ..reasoning.detection import Intent  # Verify this path exists in your project
 
 Procedure = Callable[..., Any]
 DummyProcedure = Callable[..., Any]
@@ -63,6 +70,7 @@ class RState:
         args: dict | None,
         kwargs: dict | None = None,
         procedure_source: str = "",
+        context_data: ContextData|None = None,
         description: str = "",
     ):
         self.name = name
@@ -74,7 +82,9 @@ class RState:
             self.procedure_source = inspect.getsource(procedure)
         else:
             self.procedure_source = procedure_source
-
+        self.infered_intent: Intent | None = None  # This will be set by the intent detector if applicable
+        self.accpeted_intent: Intent | None = None  # This will be set by the user if applicable
+        self.context_data = context_data
     def run(self):
         if self.status == RStateStatus.COMPLETED:
             print(f"State {self.name} has already been executed. Skipping execution.")
@@ -98,6 +108,9 @@ class RState:
             "args": self.args,
             "description": self.description,
             "status": self.status.value,
+            "infered_intent": self.infered_intent.__dict__() if self.infered_intent else None,
+            "accpeted_intent": self.accpeted_intent.__dict__() if self.accpeted_intent else None,
+            "context_data": self.context_data.__dict__() if self.context_data else None,
         }
 
     @staticmethod
@@ -109,6 +122,34 @@ class RState:
         state.args = data.get("args", {})
         state.description = data.get("description", "")
         state.status = RStateStatus(data.get("status", "pending"))
+        if data.get("context_data"):
+            context_dict = data["context_data"]
+            context_files = [Path(path) for path in context_dict.get("context_files", [])]
+            base_path_value = context_dict.get("base_path")
+            base_path = Path(base_path_value) if base_path_value else None
+            state.context_data = ContextData(
+                data=context_dict.get("data", {}),
+                context_files=context_files,
+                hashes=context_dict.get("hashes", {}),
+                base_path=base_path,
+            )
+        else:
+            state.context_data = None
+        infered_intent_data = data.get("infered_intent")
+
+        if infered_intent_data:
+            from ..reasoning.detection import Intent
+
+            state.infered_intent = Intent(**infered_intent_data)
+        else:
+            state.infered_intent = None
+        accpeted_intent_data = data.get("accpeted_intent")
+        if accpeted_intent_data:
+            from ..reasoning.detection import Intent
+
+            state.accpeted_intent = Intent(**accpeted_intent_data)
+        else:
+            state.accpeted_intent = None
         return state
 
 
@@ -123,10 +164,18 @@ class Transformation:
         self.state2 = state2
         self.description = description
         self.p_changes = get_procedure_changes(state1.procedure_source, state2.procedure_source)
+        if state1.context_data is None and state2.context_data is None:
+            self.context_changes = {}
+        else:
+            empty_context = ContextData(data={}, context_files=[], hashes={})
+            self.context_changes = get_context_changes(
+                state1.context_data or empty_context,
+                state2.context_data or empty_context,
+            )
         self.args_changes = get_args_changes(state1.args, state2.args)
 
     def __has__changed__(self) -> bool:
-        return bool(self.p_changes or self.args_changes)
+        return bool(self.p_changes or self.args_changes or self.context_changes)
 
     def __dict__(self):
         return {
@@ -135,8 +184,15 @@ class Transformation:
             "state2": self.state2.name,
             "description": self.description,
             "procedure_changes": self.p_changes,
-            "args_changes": self.args_changes,
+            "context_changes": self.context_changes,
+            "args_changes": {k: v for k, v in self.args_changes.items()},
         }
+    def args_changes_str(self) -> str:
+        changes_str = []
+        for _, change in self.args_changes.items():
+            changes_str.append(str(change))
+
+        return "\n".join(changes_str)
 
     @staticmethod
     def from_dict(data: dict, state1: RState, state2: RState):
@@ -146,7 +202,15 @@ class Transformation:
         transformation.state2 = state2
         transformation.description = data.get("description", "")
         transformation.p_changes = data.get("procedure_changes", {})
-        transformation.args_changes = data.get("args_changes", {})
+        transformation.context_changes = data.get("context_changes", {})
+        arg_changes = data.get("args_changes", {})
+        transformation.args_changes = {
+            k: cast(
+                ArgValueChangeType | ArgTypeChangeType | tuple[Any, Any],
+                v if isinstance(v, (ArgValueChangeType, ArgTypeChangeType)) else dict2type(v),
+            )
+            for k, v in arg_changes.items()
+        }
         return transformation
 
 

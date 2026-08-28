@@ -2,8 +2,10 @@ from unflow.core.diff_args import (
     diff_args,
     get_args_changes,
 )
-from unflow.core.diff_code import (
+from core.code.diff_code import (
+    build_procedure_change_prompt,
     diff_procedure,
+    format_procedure_changes_for_llm,
     get_procedure_changes,
 )
 
@@ -43,6 +45,28 @@ class TestDiffProcedure:
         assert diff_procedure(SRC_A, SRC_B) is True
 
 
+class TestProcedureChangesLLMFormatting:
+    def test_format_procedure_changes_for_llm(self):
+        changes = get_procedure_changes(SRC_A_STRIPPED, SRC_B_STRIPPED)
+
+        payload = format_procedure_changes_for_llm(changes)
+
+        assert payload["change_type"] == "modified"
+        assert payload["added_lines"] >= 1
+        assert payload["removed_lines"] >= 1
+        assert payload["hunk_headers"]
+        assert payload["patch"]
+
+    def test_build_procedure_change_prompt(self):
+        changes = get_procedure_changes(SRC_A_STRIPPED, SRC_B_STRIPPED)
+
+        prompt = build_procedure_change_prompt(changes)
+
+        assert '"task"' in prompt
+        assert '"instructions"' in prompt
+        assert '"change"' in prompt
+
+
 class TestGetArgsChanges:
     def test_identical_args(self):
         assert get_args_changes({"a": 1}, {"a": 1}) == {}
@@ -58,6 +82,14 @@ class TestGetArgsChanges:
     def test_key_removed(self):
         changes = get_args_changes({"a": 1, "b": 2}, {"a": 1})
         assert len(changes) > 0
+
+    def test_key_added_uses_new_value(self):
+        changes = get_args_changes({"a": 1}, {"a": 1, "b": 2})
+        assert changes["b"].to_value == 2
+
+    def test_key_removed_uses_old_value(self):
+        changes = get_args_changes({"a": 1, "b": 2}, {"a": 1})
+        assert changes["b"].from_value == 2
 
     def test_empty_dicts(self):
         assert get_args_changes({}, {}) == {}

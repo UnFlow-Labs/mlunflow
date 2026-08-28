@@ -42,28 +42,30 @@ class TestGraphBuilder:
     def test_transform__creates_new_state(self, builder):
         state = builder.create_state(_sample, 1, 2)
         transformed = builder.transform(state)
-        assert transformed is True
+        assert transformed == (True, None)
         assert builder.compute_graph.get_state(state.name) == state
 
     def test_transform__duplicate_args_returns_none(self, builder):
         state1 = builder.create_state(_sample, 1, 2)
-        assert builder.transform(state1) is True
+        assert builder.transform(state1) == (True, None)
         state2 = builder.create_state(_sample, 1, 2)
-        assert builder.transform(state2) is False
+        transformed, previous_state = builder.transform(state2)
+        assert transformed is False
+        assert previous_state is not None
 
     def test_transform__different_args_creates_new_state(self, builder):
         state1 = builder.create_state(_sample, 1, 2)
-        assert builder.transform(state1) is True
+        assert builder.transform(state1) == (True, None)
         state2 = builder.create_state(_sample, 3, 4)
-        assert builder.transform(state2) is True
+        assert builder.transform(state2) == (True, None)
         assert len(builder.compute_graph.get_states()) == 2
         assert len(builder.compute_graph.get_transformations()) == 1
 
     def test_transform__different_procedure_creates_new_state(self, builder):
         state1 = builder.create_state(_sample, 1)
-        assert builder.transform(state1) is True
+        assert builder.transform(state1) == (True, None)
         state2 = builder.create_state(_other, 5)
-        assert builder.transform(state2) is True
+        assert builder.transform(state2) == (True, None)
         assert len(builder.compute_graph.get_states()) == 2
         assert len(builder.compute_graph.get_transformations()) == 1
 

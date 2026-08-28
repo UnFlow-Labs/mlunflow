@@ -1,6 +1,15 @@
-from examples.LeNetMNIST.lenet import DataConfig, ModelConfig, TrainingConfig, run_experiment
+import sys
+from pathlib import Path
 
-# run_experiment.clear_graph()  # Clear the graph before starting the experiment
+# Add the project root to sys.path to resolve imports
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+
+from examples.LeNetMNIST.lenet import DataConfig, ModelConfig, TrainingConfig
+from examples.LeNetMNIST.train import run_experiment
+
+
+run_experiment.clear_graph()  # Clear the graph before starting the experiment
+print(run_experiment.print_graph())  # Print the graph before starting the experiment
 training_config = TrainingConfig(num_epochs=5, optimizer="Adam", optimizer_params={"lr": 0.001})
 result = run_experiment(training_config)
 print(f"Final Result: Loss = {result['loss']:.4f}, Accuracy = {result['accuracy']:.2f}%")
@@ -13,7 +22,8 @@ new_training_config = TrainingConfig(
 new_result = run_experiment(new_training_config)
 print(f"New Result with AdamW: Loss = {new_result['loss']:.4f}, Accuracy = {new_result['accuracy']:.2f}%")
 
-# Hypothesis1: Increasing the number of epochs might lead to better convergence and potentially improved accuracy, but it also increases the risk of overfitting if the model is trained for too long without proper regularization.
+# Hypothesis1: Increasing the number of epochs might lead to better convergence and potentially improved accuracy, 
+# but it also increases the risk of overfitting if the model is trained for too long without proper regularization.
 new_training_config_longer_epochs = TrainingConfig(
     num_epochs=10, optimizer="AdamW", optimizer_params={"lr": 0.001, "weight_decay": 0.01}
 )
@@ -150,6 +160,10 @@ for batch_size in [32, 64, 128, 1024, 2048]:
         data_settings=DataConfig(batch_size=batch_size),
     )
     new_result_batchsize = run_experiment(new_training_config_batchsize)
-    print(
-        f"New Result with batch size {batch_size}: Loss = {new_result_batchsize['loss']:.4f}, Accuracy = {new_result_batchsize['accuracy']:.2f}%"
-    )
+    if new_result_batchsize is not None:
+        print(
+            f"New Result with batch size {batch_size}: Loss = {new_result_batchsize['loss']:.4f}, Accuracy = {new_result_batchsize['accuracy']:.2f}%"
+        )
+    # print(
+    #     f"New Result with batch size {batch_size}: Loss = {new_result_batchsize['loss']:.4f}, Accuracy = {new_result_batchsize['accuracy']:.2f}%"
+    # )

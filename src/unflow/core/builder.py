@@ -32,12 +32,16 @@ class GraphBuilder:
 
     def create_state(self, func, *args, **kwargs):
         g_name = func.__name__
+        procedure_source = kwargs.pop("_unflow_procedure_source", "")
+        context_data = kwargs.pop("_unflow_context_data", None)
         params = self.normalize(func, args, kwargs)
         new_state = RState(
             name=f"{g_name}_{len(self.compute_graph.get_states())}",
             procedure=func,
             args=params,
             kwargs={},
+            procedure_source=procedure_source,
+            context_data=context_data,
             description="auto",
         )
         return new_state
@@ -58,14 +62,14 @@ class GraphBuilder:
             if t.__has__changed__():
                 transformations.append(t)
             else:
-                return False
+                return False, prev_state
 
         if len(transformations) > 0 or len(existing_states) == 0:
             self.compute_graph.add_state(state)
             for t in transformations:
                 self.compute_graph.add_transformation(t.state1, t.state2, t)
-            return True
-        return False
+            return True, None
+        return False, prev_state
 
     def save_graph(self, name: str):
         self.db.save_graph(name, self.compute_graph.execution_path, self.compute_graph.graph2json())

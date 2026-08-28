@@ -18,11 +18,13 @@ enabling users to manage and track the execution of functions in a structured an
 
 from collections.abc import Callable
 from functools import wraps
+import inspect
 from logging import getLogger
 from numbers import Number
 from typing import Any
 
 from ..core.builder import GraphBuilder
+from ..core.code.context_files import ContextFileTracker, read_context_files
 from ..core.executors.executor import Executor
 from ..core.executors.local_exectuor import LocalExecutor
 from ..core.scheduler import Scheduler
@@ -70,16 +72,47 @@ class unflowdecorator:
     ```
     """
 
-    def __init__(self, executor: Executor | None = None):
+    def __init__(self, executor: Executor | None = None, context_files=None, intent_detector=None):
         """
         A decorator that wraps a function to enable unflow's graph-based execution.
 
         Args:
             executor: An instance of an Executor. If None, LocalExecutor is used by default.
+            intent_detector: An instance of an IntentDetector. If None, no intent detection is performed.
         """
         # get the execution path from the caller's frame
         self.graph_builder = GraphBuilder("")
         self.executor = executor or LocalExecutor()
+        self.context_files = context_files
+        self._context_tracker = ContextFileTracker(context_files) if context_files else None
+        self._context_watch_started = False
+        self.intent_detector = None
+        if intent_detector:
+            self.intent_detector = intent_detector
+            self.intent_detector._set_graph(self.graph_builder.compute_graph)
+        self.state : RState | None = None
+
+    def _get_context_data(self):
+        if not self.context_files:
+            return None
+        if self._context_tracker is None:
+            return read_context_files(self.context_files, strict=False)
+
+        if not self._context_watch_started:
+            try:
+                self._context_tracker.start()
+            except ModuleNotFoundError:
+                logger.warning("watchfiles is not installed; context snapshots will be refreshed on-demand")
+            self._context_watch_started = True
+        self._context_tracker.update()
+        return self._context_tracker.snapshot()
+
+    def stop_context_watch(self):
+        if self._context_tracker is not None:
+            self._context_tracker.stop()
+
+    def __del__(self):
+        self.stop_context_watch()
 
     def get_execution_path(self, func):
         from pathlib import Path
@@ -138,8 +171,65 @@ class unflowdecorator:
         wrapper.query_with_outcomes = lambda outcome_filters, **filters: self.query_with_outcomes(
             func, outcome_filters, **filters
         )
-
+        wrapper.print_graph = lambda: self.print_graph(func)
+        wrapper.get_intents = lambda save_in_graph=False, mark_as_accept=False: self.get_intents(
+            func, save_in_graph=save_in_graph, mark_as_accept=mark_as_accept
+        )
+        wrapper.stop_context_watch = lambda: self.stop_context_watch()
         return wrapper
+    def print_graph(self, func: Callable) -> str:
+        """
+        Returns a string representation of the compute graph.
+
+        Returns:
+            A string representation of the compute graph.
+        """
+        self.set_execution_path(self.get_execution_path(func))
+        self.graph_builder.load_graph(func.__name__)
+        return str(self.graph_builder.compute_graph)
+    
+    def _set_intent(self, state: RState):
+        if self.intent_detector:
+            intent = self.intent_detector.detect_intent(state)
+            state.infered_intent = intent
+            print(f"Inferred Intent: {intent.name} with confidence {intent.confidence}")
+
+    def _predict_outcome(self, state:RState) -> Any:
+        if self.intent_detector is None:
+            raise ValueError("Intent detector is not set. Please provide an intent detector.")
+        # Use the intent detector to predict the outcome based on the inferred intent
+        predicted_outcome = self.intent_detector.predict_outcome(state)
+        return predicted_outcome    
+    
+    def get_intents(self, func: Callable, save_in_graph=False, mark_as_accept=False) -> dict[str, Any]:
+        """
+        Retrieves the inferred intents of all executed states for the given function.
+        Please note that this will take a plenty of time if the graph is large and the LLM is slow.
+
+        Args:
+            func: The function whose intents are to be retrieved.
+            save_in_graph: If True, saves the inferred intents in the graph.
+            mark_as_accept: If True, marks the inferred intents as accepted in the graph.
+        Returns:
+            A dictionary mapping state names to their corresponding inferred intents.
+        """
+        self.set_execution_path(self.get_execution_path(func))
+        self.graph_builder.load_graph(func.__name__)
+        intents = {}
+        for node in self.graph_builder.compute_graph.graph.nodes:
+            state = self.graph_builder.compute_graph.state_map.get(node)
+            if state is not None and hasattr(state, "infered_intent"):
+                if state.infered_intent is None:
+                    self._set_intent(state)
+                    if save_in_graph:
+                        self.graph_builder.save_graph(func.__name__)
+                if mark_as_accept and state.infered_intent is not None:
+                    state.accpeted_intent = state.infered_intent
+                    if save_in_graph:
+                        self.graph_builder.save_graph(func.__name__)
+                intents[node] = state.infered_intent
+        return intents
+    
 
     def clear_graph(self, func: Callable):
         """
@@ -162,21 +252,40 @@ class unflowdecorator:
             *args: Positional arguments for the function.
             **kwargs: Keyword arguments for the function.
         Returns:
-            The new state created in the graph, or None if no new state was created."""
+            The new state created in the graph, an outcome object of the previously executed state or None if there is no outcome for this."""
         self.set_execution_path(self.get_execution_path(func))
         self.graph_builder.load_graph(func.__name__)
-        new_state = self.graph_builder.create_state(func, *args, **kwargs)
-        can_transform = self.graph_builder.transform(new_state)
+        try:
+            procedure_source = inspect.getsource(func)
+        except (OSError, TypeError):
+            procedure_source = ""
+        context_data = self._get_context_data()
+        new_state = self.graph_builder.create_state(
+            func,
+            *args,
+            _unflow_procedure_source=procedure_source,
+            _unflow_context_data=context_data,
+            **kwargs,
+        )
+        can_transform, prev_state = self.graph_builder.transform(new_state)
         if not can_transform:
             logger.info("No new state created. The function has already been executed with the same arguments.")
-            return None
+            if prev_state is not None:
+                return self.graph_builder.load_outcome(prev_state)
+            else:
+                return None
+        self._set_intent(new_state)
+        self._predict_outcome(new_state)
         self.graph_builder.save_graph(func.__name__)
+        
         return new_state
 
     def _run_once(self, func: Callable, args, kwargs):
         new_state = self._build_graph(func, *args, **kwargs)
         if new_state is None:
             return None
+        if isinstance(new_state, Outcome):
+            return ExecutionRecord(status=RStateStatus.COMPLETED, start_time=None, end_time=None, error=None, outcome=new_state)
         scheduler = Scheduler(self.graph_builder.compute_graph, self.executor)
         record, graph = scheduler.run(new_state)
         self.graph_builder.finalize(graph, record, func.__name__, new_state)

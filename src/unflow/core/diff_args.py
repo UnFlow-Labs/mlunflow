@@ -125,6 +125,19 @@ def parse_deepdiff_path(path: str) -> tuple[list[str], str]:
     return [str(token) for token in tokens[:-1]], str(tokens[-1])
 
 
+def _get_value_at_path(data: Any, tokens: list[str]) -> Any:
+    """Resolve a nested value from dict/list/tuple structures using parsed DeepDiff tokens."""
+    current = data
+    for token in tokens:
+        if isinstance(current, dict):
+            current = current[token]
+        elif isinstance(current, (list, tuple)):
+            current = current[int(token)]
+        else:
+            current = getattr(current, token)
+    return current
+
+
 def get_args_changes(args1: dict, args2: dict) -> dict[str, ArgValueChangeType | ArgTypeChangeType | tuple[Any, Any]]:
     comparable_args1 = normalize_args(args1)
     comparable_args2 = normalize_args(args2)
@@ -171,20 +184,28 @@ def get_args_changes(args1: dict, args2: dict) -> dict[str, ArgValueChangeType |
                         parents, arg_name = parse_deepdiff_path(item)
                         arg_name = str(arg_name)
                         parents = [str(parent) for parent in parents]
+                        try:
+                            to_value = _get_value_at_path(comparable_args2, [*parents, arg_name])
+                        except Exception:
+                            to_value = f"<added>:{item}"
                         changes[arg_name] = ArgValueChangeFactory(
                             arg_name=arg_name,
                             parents=parents,
                             from_value=None,
-                            to_value="<added>",
+                            to_value=to_value,
                         )
                     elif change_type == "dictionary_item_removed":
                         parents, arg_name = parse_deepdiff_path(item)
                         arg_name = str(arg_name)
                         parents = [str(parent) for parent in parents]
+                        try:
+                            from_value = _get_value_at_path(comparable_args1, [*parents, arg_name])
+                        except Exception:
+                            from_value = f"<removed>:{item}"
                         changes[arg_name] = ArgValueChangeFactory(
                             arg_name=arg_name,
                             parents=parents,
-                            from_value="<removed>",
+                            from_value=from_value,
                             to_value=None,
                         )
     return changes

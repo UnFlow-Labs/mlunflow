@@ -1,3 +1,4 @@
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -34,10 +35,22 @@ class TestUnflowDecorator:
         assert wrapped.__name__ == "_train"
         assert hasattr(wrapped, "run_multiple")
         assert hasattr(wrapped, "clear_graph")
+        assert hasattr(wrapped, "print_graph")
         assert hasattr(wrapped, "query_states")
         assert hasattr(wrapped, "query_transformations")
         assert hasattr(wrapped, "shortest_path")
         assert hasattr(wrapped, "query_with_outcomes")
+
+    def test_print_graph_returns_string(self, decorator):
+        deco, mock_gb = decorator
+        wrapped = deco(_train)
+        mock_graph = MagicMock()
+        mock_graph.__str__.return_value = "ComputeGraph(execution_path='x', states=0, transformations=0)"
+        mock_gb.compute_graph = mock_graph
+
+        result = wrapped.print_graph()
+
+        assert result == "ComputeGraph(execution_path='x', states=0, transformations=0)"
 
     def test_call__returns_output(self, decorator):
         deco, _ = decorator
@@ -150,6 +163,26 @@ class TestUnflowDecorator:
         mock_gb.load_graph.assert_called_with("_train")
         mock_gb.compute_graph.shortest_path.assert_called_once_with("s1", "s2")
 
+    def test_invalid_code_scope_raises(self):
+        with pytest.raises(ValueError, match="code_scope"):
+            unflowdecorator(code_scope="module")
+
+    def test_repository_scope_uses_snapshot(self, tmp_path: Path):
+        project_root = tmp_path / "repo"
+        project_root.mkdir()
+        (project_root / "src").mkdir()
+        file_path = project_root / "src" / "a.py"
+        file_path.write_text("print('hello')\n")
+
+        deco = unflowdecorator(code_scope="repository", repo_path=str(project_root))
+
+        with patch("unflow.core.unflow_core.inspect.getsource", return_value="def _train(): pass"):
+            snapshot = deco._get_procedure_source_for_state(_train)
+
+        assert "src/a.py" in snapshot
+        assert "# repo_root=" in snapshot
+        assert "def _train(): pass" not in snapshot
+
 
 class TestRunOnce:
     @pytest.fixture
@@ -180,13 +213,17 @@ class TestRunOnce:
         graph = MagicMock()
 
         mock_gb.create_state.return_value = mock_state
-        mock_gb.transform.return_value = True
+        mock_gb.transform.return_value = (True, None)
         mock_sched.run.return_value = (mock_record, graph)
 
         result = deco._run_once(_train, (), {"lr": 0.01})
 
         mock_gb.load_graph.assert_called_once_with("_train")
-        mock_gb.create_state.assert_called_once_with(_train, lr=0.01)
+        call_args = mock_gb.create_state.call_args
+        assert call_args is not None
+        assert call_args.args[0] is _train
+        assert call_args.kwargs["lr"] == 0.01
+        assert isinstance(call_args.kwargs["procedure_source"], str)
         mock_gb.transform.assert_called_once_with(mock_state)
         mock_gb.save_graph.assert_called()
         mock_sched.run.assert_called_once_with(mock_state)
@@ -198,7 +235,7 @@ class TestRunOnce:
         deco, mock_gb, _, mock_sched_cls = deco
         mock_state = MagicMock()
         mock_gb.create_state.return_value = mock_state
-        mock_gb.transform.return_value = False
+        mock_gb.transform.return_value = (False, None)
 
         result = deco._run_once(_train, (), {"lr": 0.01})
 

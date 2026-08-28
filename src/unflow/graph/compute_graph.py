@@ -119,3 +119,37 @@ class ComputeGraph:
     def clear(self):
         self.graph.clear()
         self.state_map.clear()
+
+    def __str__(self):
+        lines = [
+            f"ComputeGraph(execution_path={self.execution_path!r}, "
+            f"states={self.graph.number_of_nodes()}, transformations={self.graph.number_of_edges()})"
+        ]
+
+        if self.graph.number_of_nodes() == 0:
+            return "\n".join(lines + ["  States: []", "  Transformations: []"])
+
+        lines.append("  States:")
+        for state_name in sorted(self.graph.nodes):
+            state = self.graph.nodes[state_name]["state"]
+            lines.append(
+                f"    - {state.name} [status={state.status.value}, args={state.args}]"
+            )
+
+        lines.append("  Transformations:")
+        if self.graph.number_of_edges() == 0:
+            lines.append("    - []")
+            return "\n".join(lines)
+
+        sorted_edges = sorted(self.graph.edges(data=True), key=lambda edge: (edge[0], edge[1]))
+        for from_state, to_state, data in sorted_edges:
+            transformation = data["transformation"]
+            lines.append(
+                f"    - {from_state} -> {to_state} ({transformation.name}; "
+                f"args_changes={len(transformation.args_changes)}, "
+                f"code_changes={len(transformation.p_changes)},"
+                f"context_changes={len(transformation.context_changes)}"
+            )
+
+        return "\n".join(lines)
+

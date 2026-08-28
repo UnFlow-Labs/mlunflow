@@ -14,6 +14,9 @@ class ChangeType(BaseModel):
 
     name: str  # name to be used in the graph
     description: str
+    type_ : str = "ChangeType"  # default type, can be overridden in subclasses
+    def __str__(self):
+        return f"{self.name}: {self.description}"
 
 
 class ArgValueChangeType(ChangeType):
@@ -29,6 +32,7 @@ class ArgValueChangeType(ChangeType):
     description: str
     from_value: Any | None = None
     to_value: Any | None = None
+    type_: str = "ArgValueChangeType"  # override type for this subclass
 
 
 class ArgTypeChangeType(ChangeType):
@@ -44,6 +48,7 @@ class ArgTypeChangeType(ChangeType):
     description: str
     from_type: type | None = None
     to_type: type | None = None
+    type_: str = "ArgTypeChangeType"  # override type for this subclass
 
 
 class CodeChangeType(ChangeType):
@@ -58,6 +63,7 @@ class CodeChangeType(ChangeType):
     description: str
     from_code: str | None = None
     to_code: str | None = None
+    type_: str = "CodeChangeType"  # override type for this subclass
 
 
 def normalize_arg_name(arg_name: str) -> str:
@@ -153,3 +159,25 @@ def CodeChangeFactory(from_code: str | None, to_code: str | None) -> CodeChangeT
         from_code=from_code,
         to_code=to_code,
     )
+
+def dict2type(change_dict: dict) -> ChangeType | ArgTypeChangeType | ArgValueChangeType | CodeChangeType:
+    """
+    Convert a dictionary representation of a change type back to its corresponding ChangeType instance.
+
+    Args:
+        change_dict (dict): A dictionary containing the change type information.
+
+    Returns:
+        ChangeType | ArgTypeChangeType | ArgValueChangeType | CodeChangeType: An instance of the appropriate ChangeType subclass.
+    """
+    type_map = {
+        "ArgValueChangeType": ArgValueChangeType,
+        "ArgTypeChangeType": ArgTypeChangeType,
+        "CodeChangeType": CodeChangeType,
+    }
+    
+    change_type_class = type_map.get(change_dict.get("type_", "ChangeType"), ChangeType)
+    return change_type_class(**change_dict)
+
+    
+    

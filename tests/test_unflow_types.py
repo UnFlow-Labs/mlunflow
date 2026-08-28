@@ -2,6 +2,7 @@ import inspect
 from pathlib import Path
 from unittest.mock import patch
 
+from unflow.core.code.context_files import ContextData
 from unflow.core.unflow_types import (
     RState,
     RStateStatus,
@@ -178,6 +179,7 @@ class TestTransformation:
         assert d["state1"] == "s1"
         assert d["state2"] == "s2"
         assert d["description"] == "desc"
+        assert "context_changes" in d
 
     def test_from_dict__roundtrip(self):
         def f():
@@ -192,3 +194,24 @@ class TestTransformation:
         assert restored.name == "t"
         assert restored.state1 == s1
         assert restored.state2 == s2
+
+    def test_context_changes__captured(self):
+        def f():
+            pass
+
+        c1 = ContextData(
+            data={"config.yaml": "epochs: 10\n"},
+            context_files=[],
+            hashes={"config.yaml": "a"},
+        )
+        c2 = ContextData(
+            data={"config.yaml": "epochs: 20\n"},
+            context_files=[],
+            hashes={"config.yaml": "b"},
+        )
+        s1 = RState(name="s1", procedure=f, args={"x": 1}, context_data=c1)
+        s2 = RState(name="s2", procedure=f, args={"x": 1}, context_data=c2)
+        t = Transformation("t", s1, s2)
+
+        assert t.context_changes
+        assert "config.yaml" in t.context_changes

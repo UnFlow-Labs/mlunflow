@@ -117,3 +117,18 @@ class TestComputeGraph:
         path = self.graph.shortest_path("s1", "s3")
 
         assert [state.name for state in path] == ["s1", "s2", "s3"]
+
+    def test_str_human_readable_representation(self):
+        self.s1.args = {"x": 1}
+        self.s2.args = {"x": 2}
+        self.graph.add_state(self.s1)
+        self.graph.add_state(self.s2)
+        t = Transformation("t", self.s1, self.s2)
+        self.graph.add_transformation(self.s1, self.s2, t)
+
+        graph_str = str(self.graph)
+
+        assert "ComputeGraph(execution_path='unflow_test_graph', states=2, transformations=1)" in graph_str
+        assert "- s1 [status=pending, args=1]" in graph_str
+        assert "- s2 [status=pending, args=1]" in graph_str
+        assert "- s1 -> s2 (t; args_changes=1" in graph_str
