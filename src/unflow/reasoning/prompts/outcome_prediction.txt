@@ -7,18 +7,32 @@ You are given:
 2) Argument/config passed:
 {args}
 
-3) Prior experiment history including code and args changes:
+3) Prior experiment history including code and args changes from the current experiment:
 {graph}
 
+4) Deterministic syntax evidence:
+{syntax_evidence}
+
+Interpretation rules (must follow):
+- The current experiment is defined only by sections (1) Code and (2) Argument/config passed.
+- Section (3) contains prior experiments and diffs relative to the current experiment; do not treat prior outcomes as outcomes of the current experiment.
+- Treat each "Args Changes" entry as a diff signal for comparison only; do not assume extra temporal steps or values not explicitly shown.
+- When describing changes, cite only values explicitly present in section (2) and/or section (3); never introduce unseen intermediate values.
+
 Task:
-- Predict the most likely primary outcome of the current experiment.
-- Check for syntax errors and logical errors in the provided code.
-- If there is a likely syntax/runtime-blocking error or a severe logical flaw, predict that the experiment will fail.
-- Prioritize execution validity first: determine whether the run is likely to fail before predicting metric trends.
-- Do not set exact numbers. Use ranges instead (for example: the value will be between 0 and 1).
-- Use concrete evidence from diffs, config changes, and graph history.
-- If signals conflict or are weak, state uncertainty in the reasoning.
-- Keep the outcome concise and specific (what will happen and why).
+- Predict the most likely primary outcome of the current experiment (training behavior, convergence direction, and likely metric trend).
+- Use concrete evidence from code, args/config changes, and graph history.
+- Focus on expected behavior first; include failure only when there is clear blocking evidence.
+- Treat deterministic syntax evidence as ground truth for `procedure_source`.
+- Do not claim a syntax error in `procedure_source` when deterministic syntax evidence says it is valid.
+- If non-syntax runtime issues are possible (device/dtype/library/data/config), describe them as risks unless clearly deterministic.
+- Do not invent argument/config values; only reference values explicitly present in `args` or graph history.
+- For any failure claim, cite the exact conflicting evidence from inputs.
+- If evidence is mixed or incomplete, prefer a non-failure prediction with calibrated uncertainty and mention key risks.
+- Compare the current experiment with the previous experiments. 
+- If prior history has only one comparable run and matching key config values, treat outcome direction as likely similar unless there is explicit conflicting evidence.
+- Do not set exact numbers. Use qualitative trends or value ranges (for example: "between 0 and 1").
+- Keep the outcome concise and specific (what will likely happen and why).
 
 Return ONLY valid JSON.
 Do not include markdown, code fences, comments, or extra keys.
@@ -33,13 +47,13 @@ JSON schema:
 }}
 
 Field requirements:
-- outcome: one short sentence describing the most likely experiment result; if failure is likely, explicitly say it is likely to fail and why.
+- outcome: one short sentence describing the most likely experiment result; include failure only when strongly supported.
 - confidence: float in [0, 1].
-- reason: key evidence supporting the predicted outcome, including syntax/logical error evidence when relevant.
+- reason: key evidence supporting the prediction, including risks when relevant.
 - confidence_reason: why the confidence score is appropriate.
 
 Scoring guidance:
-- High confidence when evidence strongly supports a specific expected result or a clear failure mode.
+- High confidence when evidence strongly and consistently supports a specific expected result (or a clear deterministic failure mode).
 - Medium confidence when evidence is partial but directionally aligned.
 - Low confidence when outcome is exploratory, ambiguous, weakly supported, or depends on unknown runtime context.
 

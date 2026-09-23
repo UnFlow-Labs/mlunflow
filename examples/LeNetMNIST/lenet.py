@@ -105,6 +105,7 @@ class ConvBlock(nn.Module):
         if use_batchnorm:
             layers.append(nn.BatchNorm2d(out_channels))
         layers.append(getattr(nn, activation_fn)())
+        
         if dropout_rate > 0:
             layers.append(nn.Dropout(dropout_rate))
         self.block = nn.Sequential(*layers)
@@ -118,6 +119,7 @@ def fc_block(in_features, out_features, use_batchnorm=True, activation_fn="ReLU"
     if use_batchnorm:
         layers.append(nn.BatchNorm1d(out_features))
     layers.append(getattr(nn, activation_fn)())
+   
     if dropout_rate > 0:
         layers.append(nn.Dropout(dropout_rate))
     return nn.Sequential(*layers)

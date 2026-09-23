@@ -90,6 +90,7 @@ class unflowdecorator:
         if intent_detector:
             self.intent_detector = intent_detector
             self.intent_detector._set_graph(self.graph_builder.compute_graph)
+            self.intent_detector._set_graph_builder(self.graph_builder)
         self.state : RState | None = None
 
     def _get_context_data(self):
@@ -194,7 +195,7 @@ class unflowdecorator:
             state.infered_intent = intent
             print(f"Inferred Intent: {intent.name} with confidence {intent.confidence}")
 
-    def _predict_outcome(self, state:RState) -> Any:
+    def _predict_outcome(self, state: RState) -> Any:
         if self.intent_detector is None:
             raise ValueError("Intent detector is not set. Please provide an intent detector.")
         # Use the intent detector to predict the outcome based on the inferred intent
@@ -274,10 +275,9 @@ class unflowdecorator:
                 return self.graph_builder.load_outcome(prev_state)
             else:
                 return None
-        self._set_intent(new_state)
-        self._predict_outcome(new_state)
+        # self._set_intent(new_state)
         self.graph_builder.save_graph(func.__name__)
-        
+        self._predict_outcome(new_state)
         return new_state
 
     def _run_once(self, func: Callable, args, kwargs):

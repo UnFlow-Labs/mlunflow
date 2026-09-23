@@ -8,9 +8,9 @@ from examples.LeNetMNIST.lenet import DataConfig, ModelConfig, TrainingConfig
 from examples.LeNetMNIST.train import run_experiment
 
 
-run_experiment.clear_graph()  # Clear the graph before starting the experiment
+# run_experiment.clear_graph()  # Clear the graph before starting the experiment
  # Print the graph before starting the experiment
-training_config = TrainingConfig(num_epochs=5, optimizer="Adam", optimizer_params={"lr": 0.001})
+
+training_config = TrainingConfig(num_epochs=20, optimizer="AdamW", optimizer_params={"lr": 1e-4})
 result = run_experiment(training_config)
 print(f"Final Result: Loss = {result['loss']:.4f}, Accuracy = {result['accuracy']:.2f}%")
-print(run_experiment.print_graph()) 
