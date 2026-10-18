@@ -197,7 +197,9 @@ class unflowdecorator:
 
     def _predict_outcome(self, state: RState) -> Any:
         if self.intent_detector is None:
-            raise ValueError("Intent detector is not set. Please provide an intent detector.")
+            # Outcome prediction is optional; without a detector we just skip it.
+            logger.debug("No intent detector set; skipping outcome prediction.")
+            return None
         # Use the intent detector to predict the outcome based on the inferred intent
         predicted_outcome = self.intent_detector.predict_outcome(state)
         return predicted_outcome    

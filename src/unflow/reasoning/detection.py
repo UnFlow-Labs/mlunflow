@@ -4,7 +4,7 @@ import re
 from pathlib import Path
 from typing import Optional
 from dataclasses import dataclass
-from unflow.core.unflow_types import RState, Outcome
+from unflow.core.unflow_types import RState
 from unflow.graph.compute_graph import ComputeGraph
 from unflow.core.builder import GraphBuilder
 from .llm import BaseLLM , TransformersLLM, LLMConfig, LlamaLLM
@@ -17,7 +17,7 @@ def get_state_code(state: RState) -> str:
     """
     Get the source code of the procedure associated with the given state.
     """
-    return state.procedure_source + "\n" + get_all_context_str(state.context_data)
+    return state.procedure.procedure_source + "\n" + get_all_context_str(state.context_data)
 
 
 def check_python_syntax(code: str) -> tuple[bool, str]:
@@ -156,39 +156,6 @@ def _has_explicit_unresolved_shape_mismatch_evidence(state: RState, graph_text: 
     return has_explicit_error
 
 
-def convert_graph_to_text(graph: ComputeGraph, state: RState) -> str:
-    """
-    Convert a graph  representation to a text format for LLM input.
-    This is a placeholder implementation; you can customize it as needed.
-    """
-    # get transformations that are connected to the given state
-    transformations = graph.query_transformations(to_state=state.name)
-    graph_text = ""
-    for transformation in transformations:
-        graph_text += f"  State: {transformation.state1.name} [{transformation.state1.status}]\n"
-        graph_text += f"  Args Diff vs Current: {transformation.args_changes_str()}\n"
-        graph_text += f"  Code Changes: {transformation.p_changes}\n"
-        graph_text += f"  Context Changes: {format_context_changes_for_llm(transformation.context_changes)}\n\n"
-    return graph_text
-
-def convert_graph_to_text_states(graph: ComputeGraph, state: RState, outcomes:dict[str, Outcome]) -> str:
-    """
-    Convert a graph representation to a text format for LLM input.
-    This is a placeholder implementation; you can customize it as needed.
-    """
-    # get states that are similar to the given state
-    transformations = graph.query_transformations(to_state=state.name)
-    graph_text = ""
-    for transformation in transformations:
-        graph_text += f"  State: {transformation.state1.name} [{transformation.state1.status}]\n"
-        graph_text += f"  Args Diff vs Current: {transformation.args_changes_str()}\n"
-        graph_text += f"  Code Changes: {transformation.p_changes}\n"
-        graph_text += f"  Context Changes: {format_context_changes_for_llm(transformation.context_changes)}\n"
-        outcome = outcomes.get(transformation.state1.name)
-        if outcome:
-            graph_text += f"  Outcome: {outcome.outputs}\n"
-    return graph_text
-
 @dataclass
 class Intent:
     name: str
@@ -219,7 +186,7 @@ class OutcomeLabel:
         confidence_reason={self.confidence_reason}, metadata={self.metadata})"
     def __dict__(self):
         return {
-            "label": self.label,
+            "label": self.outcome,
             "confidence": self.confidence,
             "metadata": self.metadata,
             "reason": self.reason,
@@ -259,7 +226,7 @@ class LLMIntentDetector(IntentDetector):
     def predict_outcome(self, state: RState) -> OutcomeLabel:
         with (module_path / "prompts" / "outcome_prediction.txt").open("r") as f:
             prompt_template = f.read()
-        syntax_ok, syntax_details = check_python_syntax(state.procedure_source)
+        syntax_ok, syntax_details = check_python_syntax(state.procedure.procedure_source)
         syntax_evidence = f"procedure_source_python_syntax={syntax_details}"
         graph_text = self.convert_graph_to_text_states(state)
         prompt = prompt_template.format(
@@ -268,7 +235,14 @@ class LLMIntentDetector(IntentDetector):
             args = state.args,
             syntax_evidence = syntax_evidence,
         )
-        print(f"LLM Prompt:\n{prompt}\n")
+        # prompt = prompt_template.format(
+        #     code = get_state_code(state),
+        #     args = state.args,
+        #     syntax_evidence = syntax_evidence
+        # )
+        # print(f"LLM Prompt:\n{prompt}\n")
+        with open(f"{state.name}_llm_prompt.txt", "w") as f:
+            f.write(prompt)
         response = self.llm.generate(prompt, config=self.llm_config)
         print(f"LLM Response:\n{response}\n")
         # Here you would parse the response to extract the outcome label and confidence score.
@@ -284,49 +258,49 @@ class LLMIntentDetector(IntentDetector):
             confidence = float(response_json.get("confidence", 0.0))
             reason = response_json.get("reason", None)
             confidence_reason = response_json.get("confidence_reason", None)
-            unsupported_failure_claim = False
-            unsupported_reason = None
+            # unsupported_failure_claim = False
+            # unsupported_reason = None
 
-            if _looks_like_hard_failure(outcome_label, reason):
-                if syntax_ok and _looks_like_syntax_failure(outcome_label, reason):
-                    unsupported_failure_claim = True
-                    unsupported_reason = (
-                        "Syntax-related failure is unsupported because deterministic parsing of "
-                        "procedure_source succeeded."
-                    )
-                elif _looks_like_optimizer_name_mismatch_failure(outcome_label, reason) and _optimizer_mismatch_claim_contradicts_evidence(state, graph_text):
-                    unsupported_failure_claim = True
-                    unsupported_reason = (
-                        "Optimizer-name mismatch failure is unsupported because the passed optimizer appears "
-                        "in supported code branches."
-                    )
-                elif _looks_like_unsupported_optimizer_failure(outcome_label, reason) and not _has_explicit_optimizer_claim_evidence(state, graph_text, outcome_label, reason):
-                    unsupported_failure_claim = True
-                    unsupported_reason = (
-                        "Unsupported-optimizer failure is ungrounded because the claimed optimizer value "
-                        "is not explicitly present in provided args/history."
-                    )
-                elif _looks_like_data_shape_mismatch_failure(outcome_label, reason) and not _has_explicit_unresolved_shape_mismatch_evidence(state, graph_text):
-                    unsupported_failure_claim = True
-                    unsupported_reason = (
-                        "Data-shape mismatch failure is unsupported because no explicit unresolved mismatch "
-                        "evidence is present in provided inputs."
-                    )
-                elif _looks_like_env_device_failure(outcome_label, reason) and not _has_explicit_env_device_evidence(state, graph_text):
-                    unsupported_failure_claim = True
-                    unsupported_reason = (
-                        "Environment/device failure is unsupported because required device evidence is missing "
-                        "from provided code/args/history."
-                    )
+            # if _looks_like_hard_failure(outcome_label, reason):
+            #     if syntax_ok and _looks_like_syntax_failure(outcome_label, reason):
+            #         unsupported_failure_claim = True
+            #         unsupported_reason = (
+            #             "Syntax-related failure is unsupported because deterministic parsing of "
+            #             "procedure_source succeeded."
+            #         )
+            #     elif _looks_like_optimizer_name_mismatch_failure(outcome_label, reason) and _optimizer_mismatch_claim_contradicts_evidence(state, graph_text):
+            #         unsupported_failure_claim = True
+            #         unsupported_reason = (
+            #             "Optimizer-name mismatch failure is unsupported because the passed optimizer appears "
+            #             "in supported code branches."
+            #         )
+            #     elif _looks_like_unsupported_optimizer_failure(outcome_label, reason) and not _has_explicit_optimizer_claim_evidence(state, graph_text, outcome_label, reason):
+            #         unsupported_failure_claim = True
+            #         unsupported_reason = (
+            #             "Unsupported-optimizer failure is ungrounded because the claimed optimizer value "
+            #             "is not explicitly present in provided args/history."
+            #         )
+            #     elif _looks_like_data_shape_mismatch_failure(outcome_label, reason) and not _has_explicit_unresolved_shape_mismatch_evidence(state, graph_text):
+            #         unsupported_failure_claim = True
+            #         unsupported_reason = (
+            #             "Data-shape mismatch failure is unsupported because no explicit unresolved mismatch "
+            #             "evidence is present in provided inputs."
+            #         )
+            #     elif _looks_like_env_device_failure(outcome_label, reason) and not _has_explicit_env_device_evidence(state, graph_text):
+            #         unsupported_failure_claim = True
+            #         unsupported_reason = (
+            #             "Environment/device failure is unsupported because required device evidence is missing "
+            #             "from provided code/args/history."
+            #         )
 
-            if unsupported_failure_claim:
-                outcome_label = "likely non-fatal outcome; any failure risk is unconfirmed from provided evidence"
-                confidence = min(confidence, 0.45)
-                reason = unsupported_reason
-                confidence_reason = (
-                    "Confidence reduced because the predicted hard-failure mode is not grounded in deterministic "
-                    "or explicit input evidence."
-                )
+            # if unsupported_failure_claim:
+            #     outcome_label = "likely non-fatal outcome; any failure risk is unconfirmed from provided evidence"
+            #     confidence = min(confidence, 0.45)
+            #     reason = unsupported_reason
+            #     confidence_reason = (
+            #         "Confidence reduced because the predicted hard-failure mode is not grounded in deterministic "
+            #         "or explicit input evidence."
+                # )
             return OutcomeLabel(outcome=outcome_label, confidence=confidence, reason=reason, 
                                 confidence_reason=confidence_reason)
         except json.JSONDecodeError:
@@ -338,13 +312,13 @@ class LLMIntentDetector(IntentDetector):
         with (module_path / "prompts" / "general_json.txt").open("r") as f:
             prompt_template = f.read()
         prompt = prompt_template.format(
-            graph = convert_graph_to_text(self.graph, state),
-            code = state.procedure_source,
+            graph = self.convert_graph_to_text_states(state),
+            code = state.procedure.procedure_source,
             args = state.args,
         )
-        print(f"LLM Prompt:\n{prompt}\n")
+        # print(f"LLM Prompt:\n{prompt}\n")
         response = self.llm.generate(prompt, config=self.llm_config)
-        print(f"LLM Response:\n{response}\n")
+        # print(f"LLM Response:\n{response}\n")
         # Here you would parse the response to extract the intent name and confidence score.
         # For simplicity, let's assume the response is in the format "IntentName:ConfidenceScore"
         
@@ -375,10 +349,11 @@ class LLMIntentDetector(IntentDetector):
         graph_text = ""
         for transformation in transformations:
             graph_text += f"  State: {transformation.state1.name} [{transformation.state1.status}]\n"
+            graph_text += f"  Intent: {transformation.state1.infered_intent}\n"
             graph_text += f"  Args Diff vs Current: {transformation.args_changes_str()}\n"
             graph_text += f"  Code Changes: {transformation.p_changes}\n"
             graph_text += f"  Context Changes: {format_context_changes_for_llm(transformation.context_changes)}\n"
-            outcome = self.graph_builder.load_outcome(transformation.state1)
-            if outcome:
-                graph_text += f"  Outcome: {outcome.outputs}\n"
+            # outcome = self.graph_builder.load_outcome(transformation.state1)
+            # if outcome:
+            #     graph_text += f"  Outcome: {outcome.outputs}\n"
         return graph_text

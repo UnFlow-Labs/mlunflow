@@ -124,11 +124,13 @@ def format_procedure_changes_for_llm(
         payload["patch"] = patch
     return payload
 
-def get_all_context_str(context_data: ContextData) -> str:
+def get_all_context_str(context_data: ContextData| None = None) -> str:
     """
     Concatenate the content of all context files into a single string.
     """
     text = ""
+    if context_data is None or not context_data.data:
+        return text
     for file_name, content in context_data.data.items():
         text += f"File: {file_name}\n{content}\n\n"
     return text.strip()

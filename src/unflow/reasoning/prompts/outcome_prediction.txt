@@ -21,6 +21,8 @@ Interpretation rules (must follow):
 
 Task:
 - Predict the most likely primary outcome of the current experiment (training behavior, convergence direction, and likely metric trend).
+- For every metric present in the outcomes (e.g. val_loss, train_time, n_steps), describe the expected direction of each metric — not just one.
+- If prior history exists, focus on ALL metrics in the outcomes of previous experiments and describe how each is expected to change.
 - Use concrete evidence from code, args/config changes, and graph history.
 - Focus on expected behavior first; include failure only when there is clear blocking evidence.
 - Treat deterministic syntax evidence as ground truth for `procedure_source`.
@@ -31,7 +33,7 @@ Task:
 - If evidence is mixed or incomplete, prefer a non-failure prediction with calibrated uncertainty and mention key risks.
 - Compare the current experiment with the previous experiments. 
 - If prior history has only one comparable run and matching key config values, treat outcome direction as likely similar unless there is explicit conflicting evidence.
-- Do not set exact numbers. Use qualitative trends or value ranges (for example: "between 0 and 1").
+- Do not set exact numbers for each metric, use ranges (e.g. between 0 and 1)
 - Keep the outcome concise and specific (what will likely happen and why).
 
 Return ONLY valid JSON.
@@ -47,7 +49,7 @@ JSON schema:
 }}
 
 Field requirements:
-- outcome: one short sentence describing the most likely experiment result; include failure only when strongly supported.
+- outcome: a paragraph describing the most likely experiment result with numbers for the metrics included; include failure only when strongly supported.
 - confidence: float in [0, 1].
 - reason: key evidence supporting the prediction, including risks when relevant.
 - confidence_reason: why the confidence score is appropriate.

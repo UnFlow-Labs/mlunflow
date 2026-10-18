@@ -1,0 +1,55 @@
+You are an assistant that predicts the outcome of a computational experiment.
+
+You are given:
+1) Code:
+{code}
+
+2) Argument/config passed:
+{args}
+
+3) Deterministic syntax evidence:
+{syntax_evidence}
+
+Interpretation rules (must follow):
+- The current experiment is defined only by sections (1) Code and (2) Argument/config passed.
+- Treat each "Args Changes" entry as a diff signal for comparison only; do not assume extra temporal steps or values not explicitly shown.
+- When describing changes, cite only values explicitly present in section (2); never introduce unseen intermediate values.
+
+Task:
+- Predict the most likely primary outcome of the current experiment (training behavior, convergence direction, and likely metric trend).
+- For every metric present in the outcomes (e.g. val_loss, train_time, n_steps), describe the expected direction of each metric — not just one.
+- Use concrete evidence from code, and args/config changes.
+- Focus on expected behavior first; include failure only when there is clear blocking evidence.
+- Treat deterministic syntax evidence as ground truth for `procedure_source`.
+- Do not claim a syntax error in `procedure_source` when deterministic syntax evidence says it is valid.
+- If non-syntax runtime issues are possible (device/dtype/library/data/config), describe them as risks unless clearly deterministic.
+- For any failure claim, cite the exact conflicting evidence from inputs.
+- If evidence is mixed or incomplete, prefer a non-failure prediction with calibrated uncertainty and mention key risks.
+- Compare the current experiment with the previous experiments. 
+- Do not set exact numbers for each metric, use ranges (e.g. between 0 and 1)
+- Keep the outcome concise and specific (what will likely happen and why).
+
+Return ONLY valid JSON.
+Do not include markdown, code fences, comments, or extra keys.
+
+JSON schema:
+
+{{
+  "outcome": "string",
+  "confidence": 0.0,
+  "reason": "string",
+  "confidence_reason": "string"
+}}
+
+Field requirements:
+- outcome: a paragraph describing the most likely experiment result with numbers for the metrics included; include failure only when strongly supported.
+- confidence: float in [0, 1].
+- reason: key evidence supporting the prediction, including risks when relevant.
+- confidence_reason: why the confidence score is appropriate.
+
+Scoring guidance:
+- High confidence when evidence strongly and consistently supports a specific expected result (or a clear deterministic failure mode).
+- Medium confidence when evidence is partial but directionally aligned.
+- Low confidence when outcome is exploratory, ambiguous, weakly supported, or depends on unknown runtime context.
+
+Output exactly one JSON object with these four keys and no additional text.

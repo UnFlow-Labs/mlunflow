@@ -1,0 +1,611 @@
+You are an assistant that predicts the outcome of a computational experiment.
+
+You are given:
+1) Code:
+import os
+import sys
+import uuid
+import glob
+from dataclasses import dataclass
+
+import numpy as np
+import torch
+from torch import nn
+import torch.nn.functional as F
+import torch.distributed as dist
+import torch._inductor.config as config
+from torch.nn.parallel import DistributedDataParallel as DDP
+
+with open(sys.argv[0]) as f:
+    code = f.read()
+
+# -----------------------------------------------------------------------------
+# OrthgonalNesterov optimizer
+
+class OrthogonalNesterov(torch.optim.Optimizer):
+    def __init__(self, params, lr=0.02, momentum=0.9, nesterov=True, zeropower_iters=5):
+        defaults = dict(lr=lr, momentum=momentum, nesterov=nesterov, zeropower_iters=zeropower_iters)
+        super().__init__(params, defaults)
+
+    def step(self):
+        for group in self.param_groups:
+            lr = group['lr']
+            momentum = group['momentum']
+            for p in group['params']:
+                g = p.grad
+                if g is None:
+                    continue
+                state = self.state[p]
+                state['steps'] = state.get('steps', 0) + 1
+                if 'momentum_buffer' not in state:
+                    state['momentum_buffer'] = torch.zeros_like(g)
+                buf = state['momentum_buffer']
+                buf.mul_(momentum).add_(g)
+                g = g.add(buf, alpha=momentum) if group['nesterov'] else buf
+                update = zeroth_power_via_newtonschulz5(g, steps=group['zeropower_iters'])
+                p.data.add_(update, alpha=-lr)
+
+@torch.compile
+def zeroth_power_via_newtonschulz5(G, steps=5, eps=1e-7):
+    r"""
+    Newton-Schulz iteration to compute the zeroth power / orthogonalization of G. We opt to use a
+    quintic iteration whose coefficients are selected to maximize the slope at zero. It turns out
+    to be empirically effective to keep increasing the slope of the quintic at zero even beyond the
+    point where it no longer converges to one everywhere after repeated application (so long as it
+    stays relatively close to 1 across the interval). Our usage of a Newton-Schulz iteration as the
+    orthogonalization method traces to Bernstein & Newhouse (2024) https://arxiv.org/abs/2409.20325
+    who suggested its use for computing the preconditioners of Shampoo.
+    """
+    assert len(G.shape) == 2
+    a, b, c = (3.4445, -4.7750,  2.0315)
+    X = G.bfloat16() / (G.norm() + eps) # ensure top singular value <= 1
+    if G.size(0) > G.size(1):
+        X = X.T
+    for _ in range(steps):
+        A = X @ X.T
+        B = A @ X
+        X = a * X + b * B + c * A @ B
+    if G.size(0) > G.size(1):
+        X = X.T
+    return X.to(G.dtype)
+
+class CombinedOptimizer:
+
+    def __init__(self, optimizers):
+        assert all(len(opt.param_groups) == 1 for opt in optimizers)
+        self.optimizers = optimizers
+        self.param_groups = [pg for opt in self.optimizers for pg in opt.param_groups]
+        self.base_lrs = [opt.param_groups[0]['lr'] for opt in self.optimizers]
+
+    def step(self):
+        for opt in self.optimizers:
+            opt.step()
+
+    def zero_grad(self, **kwargs):
+        for opt in self.optimizers:
+            opt.zero_grad(**kwargs)
+
+    def scale_lrs(self, lr_scale):
+        for base_lr, opt in zip(self.base_lrs, self.optimizers):
+            opt.param_groups[0]['lr'] = base_lr * lr_scale
+
+    def state_dict(self):
+        return [opt.state_dict() for opt in self.optimizers]
+
+# -----------------------------------------------------------------------------
+# PyTorch nn.Module definitions for the GPT-2 model
+
+class Rotary(torch.nn.Module):
+
+    def __init__(self, dim, base=10000):
+        super().__init__()
+        inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2).float() / dim))
+        self.register_buffer("inv_freq", inv_freq)
+        self.seq_len_cached = None
+        self.cos_cached = None
+        self.sin_cached = None
+
+    def forward(self, x):
+        seq_len = x.shape[1]
+        if seq_len != self.seq_len_cached:
+            self.seq_len_cached = seq_len
+            t = torch.arange(seq_len, device=x.device).type_as(self.inv_freq)
+            freqs = torch.outer(t, self.inv_freq).to(x.device)
+            self.cos_cached = freqs.cos()
+            self.sin_cached = freqs.sin()
+        return self.cos_cached[None, :, None, :], self.sin_cached[None, :, None, :]
+
+def apply_rotary_emb(x, cos, sin):
+    assert x.ndim == 4 # multihead attention
+    d = x.shape[3]//2
+    x1 = x[..., :d]
+    x2 = x[..., d:]
+    y1 = x1 * cos + x2 * sin
+    y2 = x1 * (-sin) + x2 * cos
+    return torch.cat([y1, y2], 3)
+
+def rmsnorm(x0, eps=1e-6):
+    x = x0.float()
+    x = x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + eps)
+    return x.type_as(x0)
+
+class CausalSelfAttention(nn.Module):
+
+    def __init__(self, config):
+        super().__init__()
+        self.n_head = config.n_head
+        self.n_embd = config.n_embd
+        self.head_dim = self.n_embd // self.n_head
+        assert self.n_embd % self.n_head == 0
+        # key, query, value projections for all heads, but in a batch
+        self.c_attn = nn.Linear(self.n_embd, 3 * self.n_embd, bias=False)
+        # output projection
+        self.c_proj = nn.Linear(self.n_embd, self.n_embd, bias=False)
+        self.rotary = Rotary(self.head_dim)
+
+    def forward(self, x):
+        B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
+        # calculate query, key, values for all heads in batch and move head forward to be the batch dim
+        qkv = self.c_attn(x)
+        q, k, v = qkv.split(self.n_embd, dim=2)
+        k = k.view(B, T, self.n_head, self.head_dim)
+        q = q.view(B, T, self.n_head, self.head_dim)
+        v = v.view(B, T, self.n_head, self.head_dim)
+        cos, sin = self.rotary(q)
+        q = apply_rotary_emb(q, cos, sin)
+        k = apply_rotary_emb(k, cos, sin)
+        y = F.scaled_dot_product_attention(q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2), is_causal=True)
+        y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
+        # output projection
+        y = self.c_proj(y)
+        return y
+
+class MLP(nn.Module):
+
+    def __init__(self, config):
+        super().__init__()
+        self.c_fc    = nn.Linear(config.n_embd, 4 * config.n_embd, bias=False)
+        self.c_proj  = nn.Linear(4 * config.n_embd, config.n_embd, bias=False)
+
+    def forward(self, x):
+        x = self.c_fc(x)
+        x = F.gelu(x)
+        x = self.c_proj(x)
+        return x
+
+class Block(nn.Module):
+
+    def __init__(self, config):
+        super().__init__()
+        self.attn = CausalSelfAttention(config)
+        self.mlp = MLP(config)
+        self.attn_scale = (1 / (2 * config.n_layer)**0.5)
+
+    def forward(self, x):
+        x = x + self.attn_scale * self.attn(rmsnorm(x))
+        x = x + self.mlp(rmsnorm(x))
+        return x
+
+# -----------------------------------------------------------------------------
+# The main GPT-2 model
+
+@dataclass
+class GPTConfig:
+    vocab_size: int = 50257
+    n_layer: int = 12
+    n_head: int = 12
+    n_embd: int = 768
+
+class GPT(nn.Module):
+
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+
+        self.transformer = nn.ModuleDict(dict(
+            wte = nn.Embedding(config.vocab_size, config.n_embd),
+            h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
+        ))
+        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+        self.transformer.wte.weight = self.lm_head.weight # https://paperswithcode.com/method/weight-tying
+
+    def forward(self, idx, targets=None, return_logits=True):
+        b, t = idx.size()
+        pos = torch.arange(0, t, dtype=torch.long, device=idx.device) # shape (t)
+
+        # forward the GPT model itself
+        x = self.transformer.wte(idx) # token embeddings of shape (b, t, n_embd)
+
+        for block in self.transformer.h:
+            x = block(x)
+        x = rmsnorm(x)
+
+        if targets is not None:
+            # if we are given some desired targets also calculate the loss
+            logits = self.lm_head(x)
+            logits = logits.float() # use tf32/fp32 for logits
+            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
+        else:
+            # inference-time mini-optimization: only forward the lm_head on the very last position
+            logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim
+            logits = logits.float() # use tf32/fp32 for logits
+            loss = None
+
+        # there are performance reasons why not returning logits is prudent, if not needed
+        if not return_logits:
+            logits = None
+
+        return logits, loss
+
+    def configure_optimizers(self, weight_decay, learning_rate, betas):
+        optimizer = CombinedOptimizer([
+            torch.optim.AdamW(self.lm_head.parameters(), lr=learning_rate, betas=betas, weight_decay=0),
+            OrthogonalNesterov(self.transformer.h.parameters(), lr=10 * learning_rate, momentum=0.95)
+        ])
+        return optimizer
+
+# -----------------------------------------------------------------------------
+# Our own simple Distributed Data Loader
+
+def _peek_data_shard(filename):
+    # only reads the header, returns header data
+    with open(filename, "rb") as f:
+        # first read the header, which is 256 int32 integers (4 bytes each)
+        header = np.frombuffer(f.read(256*4), dtype=np.int32)
+    if header[0] != 20240520:
+        print("ERROR: magic number mismatch in the data .bin file!")
+        print("---> HINT: Are you passing in a correct file with --input_bin?")
+        print("---> HINT: Dataset encoding changed recently, re-run data prepro or refer again to README")
+        print("---> HINT: For example re-run: `python dev/data/tinyshakespeare.py`, then re-try")
+        exit(1)
+    assert header[1] == 1, "unsupported version"
+    ntok = header[2] # number of tokens (claimed)
+    return ntok # for now just return the number of tokens
+
+def _load_data_shard(filename):
+    with open(filename, "rb") as f:
+        # first read the header, which is 256 int32 integers (4 bytes each)
+        header = np.frombuffer(f.read(256*4), dtype=np.int32)
+        assert header[0] == 20240520, "magic number mismatch in the data .bin file"
+        assert header[1] == 1, "unsupported version"
+        ntok = header[2] # number of tokens (claimed)
+        # the rest of it are tokens, stored as uint16
+        tokens = np.frombuffer(f.read(), dtype=np.uint16)
+    assert len(tokens) == ntok, "number of tokens read does not match header?"
+    return tokens
+
+class DistributedDataLoader:
+    def __init__(self, filename_pattern, B, T, process_rank, num_processes):
+        self.process_rank = process_rank
+        self.num_processes = num_processes
+        self.B = B
+        self.T = T
+
+        # glob files that match the pattern
+        self.files = sorted(glob.glob(filename_pattern))
+        assert len(self.files) > 0, f"did not find any files that match the pattern {filename_pattern}"
+
+        # load and validate all data shards, count number of tokens in total
+        ntok_total = 0
+        for fname in self.files:
+            shard_ntok = _peek_data_shard(fname)
+            assert shard_ntok >= num_processes * B * T + 1
+            ntok_total += int(shard_ntok)
+        self.ntok_total = ntok_total
+
+        # kick things off
+        self.reset()
+
+    def reset(self):
+        self.current_shard = 0
+        self.current_position = self.process_rank * self.B * self.T
+        self.tokens = _load_data_shard(self.files[self.current_shard])
+
+    def advance(self): # advance to next data shard
+        self.current_shard = (self.current_shard + 1) % len(self.files)
+        self.current_position = self.process_rank * self.B * self.T
+        self.tokens = _load_data_shard(self.files[self.current_shard])
+
+    def next_batch(self):
+        B = self.B
+        T = self.T
+        buf = self.tokens[self.current_position : self.current_position+B*T+1]
+        buf = torch.tensor(buf.astype(np.int32), dtype=torch.long)
+        x = (buf[:-1]).view(B, T) # inputs
+        y = (buf[1:]).view(B, T) # targets
+        # advance current position and load next shard if necessary
+        self.current_position += B * T * self.num_processes
+        if self.current_position + (B * T * self.num_processes + 1) > len(self.tokens):
+            self.advance()
+        return x.cuda(), y.cuda()
+
+# -----------------------------------------------------------------------------
+# int main
+
+def print0(*args, **kwargs):
+    # modified print that only prints from the master process
+    # if this is not a distributed run, it's just a print
+    if int(os.environ.get("RANK", 0)) == 0:
+        print(*args, **kwargs)
+
+@dataclass
+class Hyperparameters:
+    # data hyperparams
+    input_bin = os.environ["NANOGPT_TRAIN_FILES"]
+    input_val_bin = os.environ["NANOGPT_VAL_FILES"]
+    val_tokens = int(os.environ["NANOGPT_VAL_TOKENS"]) # how many tokens of validation data? it's important to keep this fixed for consistent comparisons
+    model = "d12"
+    # optimization
+    batch_size = 64 # batch size in tokens
+    sequence_length = 1024 # sequence length
+    num_iterations = 7000 # number of iterations to run
+
+    learning_rate = 0.0018
+    warmup_iters = 250
+    warmdown_iters = 2000
+    weight_decay = 0.1
+    grad_clip = 1.0
+    # evaluation
+    val_loss_every = 128 # every how many steps to evaluate val loss? 0 for only at the end
+    val_max_steps = 20 # how many batches of val to average?
+    save_every = 0 # every how many steps to save the checkpoint? 0 for only at the end
+
+    accumulation = 1
+
+    output_dir = "pylog124m"
+
+if __name__ == "__main__":
+    import time
+    import argparse
+    print0(f"Running pytorch {torch.version.__version__}")
+
+    # parser = argparse.ArgumentParser()
+    # # file system input / output
+    # parser.add_argument("--input_bin", type=str, help="input .bin to train on")
+    # parser.add_argument("--input_val_bin", type=str, help="input .bin to eval validation loss on")
+    # parser.add_argument("--model", type=str, default="d12", help="d12|d24|d36|d48")
+    # # token layout for each step of the optimization
+    # parser.add_argument("--batch_size", type=int, default=4, help="batch size, in units of #batch dimensions")
+    # parser.add_argument("--accumulation", type=int, default=1)
+    # parser.add_argument("--sequence_length", type=int, default=64, help="sequence length")
+    # # workload (number of steps)
+    # parser.add_argument("--num_iterations", type=int, default=10, help="number of iterations to run")
+    # # optimization
+    # parser.add_argument("--learning_rate", type=float, default=1e-4, help="learning rate warmup iterations")
+    # parser.add_argument("--warmup_iters", type=int, default=0, help="learning rate warmup iterations")
+    # parser.add_argument("--warmdown_iters", type=int, default=0, help="learning rate warmdown iterations")
+    # parser.add_argument("--weight_decay", type=float, default=0.0, help="weight decay")
+    # # evaluation
+    # parser.add_argument("--val_loss_every", type=int, default=0, help="every how many steps to evaluate val loss?")
+    # parser.add_argument("--val_max_steps", type=int, default=20, help="how many batches of val to average?")
+    # parser.add_argument("--save_every", type=int, default=0, help="every how many steps to save the checkpoint")
+    # args = parser.parse_args()
+    args = Hyperparameters()
+
+    # args error checking and convenience variables
+    B, T = args.batch_size, args.sequence_length
+    assert args.model in {"d12", "d24", "d36", "d48"}
+
+    # set up DDP (distributed data parallel). torchrun sets this env variable
+    assert torch.cuda.is_available()
+    dist.init_process_group(backend='nccl')
+    ddp_rank = int(os.environ['RANK'])
+    ddp_local_rank = int(os.environ['LOCAL_RANK'])
+    ddp_world_size = int(os.environ['WORLD_SIZE'])
+    device = f'cuda:{ddp_local_rank}'
+    torch.cuda.set_device(device)
+    print(f"using device: {device}")
+    master_process = (ddp_rank == 0) # this process will do logging, checkpointing etc.
+
+    # load tokens
+    train_loader = DistributedDataLoader(args.input_bin, B, T, ddp_rank, ddp_world_size)
+    print0(f"Training DataLoader: total number of tokens: {train_loader.ntok_total} across {len(train_loader.files)} files")
+    val_loader = DistributedDataLoader(args.input_val_bin, B, T, ddp_rank, ddp_world_size)
+    print0(f"Validation DataLoader: total number of tokens: {val_loader.ntok_total} across {len(val_loader.files)} files")
+    x, y = train_loader.next_batch()
+
+    # init the model from scratch
+    num_vocab = 50257
+    model_config = {
+        "d12": GPTConfig(vocab_size=num_vocab, n_layer=12, n_head=12, n_embd=768),
+        "d24": GPTConfig(vocab_size=num_vocab, n_layer=24, n_head=16, n_embd=1024),
+        "d36": GPTConfig(vocab_size=num_vocab, n_layer=36, n_head=20, n_embd=1280),
+        "d48": GPTConfig(vocab_size=num_vocab, n_layer=48, n_head=25, n_embd=1600),
+    }[args.model]
+    model = GPT(model_config)
+    model = model.cuda()
+    if hasattr(config, "coordinate_descent_tuning"):
+        config.coordinate_descent_tuning = True # suggested by @Chillee
+    print0("compiling the model...")
+    model = torch.compile(model)
+
+    # here we wrap model into DDP container
+    model = DDP(model, device_ids=[ddp_local_rank])
+    raw_model = model.module # always contains the "raw" unwrapped model
+
+    # set up a context manager following the desired dtype and device
+    ctx = torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16)
+
+    # init the optimizer
+    optimizer = raw_model.configure_optimizers(weight_decay=args.weight_decay,
+                                               learning_rate=args.learning_rate, betas=(0.9, 0.95))
+
+    # learning rate decay scheduler (linear warmup and warmdown)
+    def get_lr(it):
+        assert it <= args.num_iterations
+        # 1) linear warmup for warmup_iters steps
+        if it < args.warmup_iters:
+            return (it+1) / args.warmup_iters
+        # 2) constant lr for a while
+        elif it < args.num_iterations - args.warmdown_iters:
+            return 1.0
+        # 3) linear warmdown
+        else:
+            decay_ratio = (args.num_iterations - it) / args.warmdown_iters
+            return decay_ratio
+
+    run_id = str(uuid.uuid4())
+    if master_process:
+        os.makedirs('logs/%s' % run_id, exist_ok=True)
+        logfile = 'logs/%s/log.txt' % run_id
+        # create the empty log file
+        with open(logfile, "w") as f:
+            pass
+
+    training_time_ms = 0
+    # start the clock
+    torch.cuda.synchronize()
+    t0 = time.time()
+    for step in range(args.num_iterations + 1):
+        last_step = (step == args.num_iterations)
+
+        # once in a while evaluate the validation dataset
+        if (last_step or (args.val_loss_every > 0 and step % args.val_loss_every == 0)):
+            # stop the clock
+            torch.cuda.synchronize()
+            training_time_ms += 1000 * (time.time() - t0)
+            model.eval()
+            val_loader.reset()
+            val_loss = 0.0
+            for _ in range(args.val_max_steps):
+                with torch.no_grad(): # I want to use ctx here but it causes a torch.compile error
+                    x_val, y_val = val_loader.next_batch()
+                    _, loss = model(x_val, y_val, return_logits=False)
+                    val_loss += loss
+            dist.all_reduce(val_loss, op=dist.ReduceOp.AVG)
+            val_loss /= args.val_max_steps
+            # log val loss to console and to logfile
+            print0(f"val loss {val_loss}")
+            if master_process:
+                print(f'step:{step}/{args.num_iterations} val_loss:{val_loss:.4f} train_time:{training_time_ms:.0f}ms')
+                with open(logfile, "a") as f:
+                    f.write(f'step:{step}/{args.num_iterations} val_loss:{val_loss:.4f} train_time:{training_time_ms:.0f}ms\n')
+            # start the clock again
+            torch.cuda.synchronize()
+            t0 = time.time()
+
+        # save the state of the training process
+        if master_process and (last_step or (args.save_every > 0 and step % args.save_every == 0)):
+            # stop the clock
+            torch.cuda.synchronize()
+            training_time_ms += 1000 * (time.time() - t0)
+            log = dict(step=step, args=args.__dict__, code=code)
+            torch.save(log, 'logs/%s/state_step%06d.pt' % (run_id, step))
+            # start the clock again
+            torch.cuda.synchronize()
+            t0 = time.time()
+
+        # bit confusing: we want to make sure to eval on 0th iteration
+        # but also after the very last iteration. so we loop for step <= num_iterations
+        # instead of just < num_iterations (one extra due to <=), only to do
+        # the validation/sampling one last time, and then we break right here as we're done.
+        if last_step:
+            break
+
+        torch.cuda.synchronize()
+        t_train_begin = time.time()
+        # --------------- TRAINING SECTION BEGIN -----------------
+        model.train()
+        for _ in range(args.accumulation):
+            # forward pass
+            with ctx:
+                _, loss = model(x, y, return_logits=False)
+                train_loss = loss.detach()
+            # advance the dataset for the next batch
+            x, y = train_loader.next_batch()
+            # backward pass
+            loss.backward()
+        for p in model.parameters():
+            p.grad /= args.accumulation
+        # determine and set the learning rate for this iteration
+        lr_scale = get_lr(step)
+        optimizer.scale_lrs(lr_scale)
+        # step the optimizer
+        optimizer.step()
+        optimizer.zero_grad(set_to_none=True)
+        # --------------- TRAINING SECTION END -------------------
+        # everything that follows now is just diagnostics, prints, logging, etc.
+        torch.cuda.synchronize()
+        t_train_end = time.time()
+
+        dist.all_reduce(train_loss, op=dist.ReduceOp.AVG)
+        tokens_per_second = ddp_world_size * B * T / (t_train_end - t_train_begin)
+        print0(f"step {step+1:4d}/{args.num_iterations} | train loss {train_loss.item():.4f} | lr_scale {lr_scale:.2e} | ({(t_train_end - t_train_begin)*1000:.2f} ms | {tokens_per_second:.0f} tok/s)")
+        # log training loss to logfile
+        if master_process:
+            with open(logfile, "a") as f:
+                f.write("s:%d trl:%f\n" % (step, train_loss.item()))
+
+    print0(f"peak memory consumption: {torch.cuda.max_memory_allocated() // 1024 // 1024} MiB")
+
+    # -------------------------------------------------------------------------
+    # clean up nice
+    dist.destroy_process_group()
+
+
+2) Argument/config passed:
+{}
+
+3) Prior experiment history including code and args changes from the current experiment:
+  State: record_1 [RStateStatus.COMPLETED]
+  Intent: None
+  Args Diff vs Current: 
+  Code Changes: {'1': '--- previous', '2': '+++ current', '3': '@@ -1,7 +1,6 @@', '4': ' import os', '5': ' import sys', '6': ' import uuid', '7': '-import math', '8': ' import glob', '9': ' from dataclasses import dataclass', '10': ' ', '11': '@@ -9,15 +8,117 @@', '12': ' import torch', '13': ' from torch import nn', '14': ' import torch.nn.functional as F', '15': '+import torch.distributed as dist', '16': ' import torch._inductor.config as config', '17': ' from torch.nn.parallel import DistributedDataParallel as DDP', '18': '-from torch.distributed import init_process_group, destroy_process_group', '19': ' ', '20': ' with open(sys.argv[0]) as f:', '21': '     code = f.read()', '22': ' ', '23': ' # -----------------------------------------------------------------------------', '24': '+# OrthgonalNesterov optimizer', '25': '+', '26': '+class OrthogonalNesterov(torch.optim.Optimizer):', '27': '+    def __init__(self, params, lr=0.02, momentum=0.9, nesterov=True, zeropower_iters=5):', '28': '+        defaults = dict(lr=lr, momentum=momentum, nesterov=nesterov, zeropower_iters=zeropower_iters)', '29': '+        super().__init__(params, defaults)', '30': '+', '31': '+    def step(self):', '32': '+        for group in self.param_groups:', '33': "+            lr = group['lr']", '34': "+            momentum = group['momentum']", '35': "+            for p in group['params']:", '36': '+                g = p.grad', '37': '+                if g is None:', '38': '+                    continue', '39': '+                state = self.state[p]', '40': "+                state['steps'] = state.get('steps', 0) + 1", '41': "+                if 'momentum_buffer' not in state:", '42': "+                    state['momentum_buffer'] = torch.zeros_like(g)", '43': "+                buf = state['momentum_buffer']", '44': '+                buf.mul_(momentum).add_(g)', '45': "+                g = g.add(buf, alpha=momentum) if group['nesterov'] else buf", '46': "+                update = zeroth_power_via_newtonschulz5(g, steps=group['zeropower_iters'])", '47': '+                p.data.add_(update, alpha=-lr)', '48': '+', '49': '+@torch.compile', '50': '+def zeroth_power_via_newtonschulz5(G, steps=5, eps=1e-7):', '51': '+    r"""', '52': '+    Newton-Schulz iteration to compute the zeroth power / orthogonalization of G. We opt to use a', '53': '+    quintic iteration whose coefficients are selected to maximize the slope at zero. It turns out', '54': '+    to be empirically effective to keep increasing the slope of the quintic at zero even beyond the', '55': '+    point where it no longer converges to one everywhere after repeated application (so long as it', '56': '+    stays relatively close to 1 across the interval). Our usage of a Newton-Schulz iteration as the', '57': '+    orthogonalization method traces to Bernstein & Newhouse (2024) https://arxiv.org/abs/2409.20325', '58': '+    who suggested its use for computing the preconditioners of Shampoo.', '59': '+    """', '60': '+    assert len(G.shape) == 2', '61': '+    a, b, c = (3.4445, -4.7750,  2.0315)', '62': '+    X = G.bfloat16() / (G.norm() + eps) # ensure top singular value <= 1', '63': '+    if G.size(0) > G.size(1):', '64': '+        X = X.T', '65': '+    for _ in range(steps):', '66': '+        A = X @ X.T', '67': '+        B = A @ X', '68': '+        X = a * X + b * B + c * A @ B', '69': '+    if G.size(0) > G.size(1):', '70': '+        X = X.T', '71': '+    return X.to(G.dtype)', '72': '+', '73': '+class CombinedOptimizer:', '74': '+', '75': '+    def __init__(self, optimizers):', '76': '+        assert all(len(opt.param_groups) == 1 for opt in optimizers)', '77': '+        self.optimizers = optimizers', '78': '+        self.param_groups = [pg for opt in self.optimizers for pg in opt.param_groups]', '79': "+        self.base_lrs = [opt.param_groups[0]['lr'] for opt in self.optimizers]", '80': '+', '81': '+    def step(self):', '82': '+        for opt in self.optimizers:', '83': '+            opt.step()', '84': '+', '85': '+    def zero_grad(self, **kwargs):', '86': '+        for opt in self.optimizers:', '87': '+            opt.zero_grad(**kwargs)', '88': '+', '89': '+    def scale_lrs(self, lr_scale):', '90': '+        for base_lr, opt in zip(self.base_lrs, self.optimizers):', '91': "+            opt.param_groups[0]['lr'] = base_lr * lr_scale", '92': '+', '93': '+    def state_dict(self):', '94': '+        return [opt.state_dict() for opt in self.optimizers]', '95': '+', '96': '+# -----------------------------------------------------------------------------', '97': ' # PyTorch nn.Module definitions for the GPT-2 model', '98': '+', '99': '+class Rotary(torch.nn.Module):', '100': '+', '101': '+    def __init__(self, dim, base=10000):', '102': '+        super().__init__()', '103': '+        inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2).float() / dim))', '104': '+        self.register_buffer("inv_freq", inv_freq)', '105': '+        self.seq_len_cached = None', '106': '+        self.cos_cached = None', '107': '+        self.sin_cached = None', '108': '+', '109': '+    def forward(self, x):', '110': '+        seq_len = x.shape[1]', '111': '+        if seq_len != self.seq_len_cached:', '112': '+            self.seq_len_cached = seq_len', '113': '+            t = torch.arange(seq_len, device=x.device).type_as(self.inv_freq)', '114': '+            freqs = torch.outer(t, self.inv_freq).to(x.device)', '115': '+            self.cos_cached = freqs.cos()', '116': '+            self.sin_cached = freqs.sin()', '117': '+        return self.cos_cached[None, :, None, :], self.sin_cached[None, :, None, :]', '118': '+', '119': '+def apply_rotary_emb(x, cos, sin):', '120': '+    assert x.ndim == 4 # multihead attention', '121': '+    d = x.shape[3]//2', '122': '+    x1 = x[..., :d]', '123': '+    x2 = x[..., d:]', '124': '+    y1 = x1 * cos + x2 * sin', '125': '+    y2 = x1 * (-sin) + x2 * cos', '126': '+    return torch.cat([y1, y2], 3)', '127': ' ', '128': ' def rmsnorm(x0, eps=1e-6):', '129': '     x = x0.float()', '130': '@@ -28,28 +129,31 @@', '131': ' ', '132': '     def __init__(self, config):', '133': '         super().__init__()', '134': '-        assert config.n_embd % config.n_head == 0', '135': '-        # key, query, value projections for all heads, but in a batch', '136': '-        self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd, bias=False)', '137': '-        # output projection', '138': '-        self.c_proj = nn.Linear(config.n_embd, config.n_embd, bias=False)', '139': '-        # regularization', '140': '         self.n_head = config.n_head', '141': '         self.n_embd = config.n_embd', '142': '+        self.head_dim = self.n_embd // self.n_head', '143': '+        assert self.n_embd % self.n_head == 0', '144': '+        # key, query, value projections for all heads, but in a batch', '145': '+        self.c_attn = nn.Linear(self.n_embd, 3 * self.n_embd, bias=False)', '146': '+        # output projection', '147': '+        self.c_proj = nn.Linear(self.n_embd, self.n_embd, bias=False)', '148': '+        self.rotary = Rotary(self.head_dim)', '149': ' ', '150': '     def forward(self, x):', '151': '         B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)', '152': '         # calculate query, key, values for all heads in batch and move head forward to be the batch dim', '153': '         qkv = self.c_attn(x)', '154': '         q, k, v = qkv.split(self.n_embd, dim=2)', '155': '-        k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)', '156': '-        q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)', '157': '-        v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)', '158': '-        y = F.scaled_dot_product_attention(q, k, v, is_causal=True)', '159': '+        k = k.view(B, T, self.n_head, self.head_dim)', '160': '+        q = q.view(B, T, self.n_head, self.head_dim)', '161': '+        v = v.view(B, T, self.n_head, self.head_dim)', '162': '+        cos, sin = self.rotary(q)', '163': '+        q = apply_rotary_emb(q, cos, sin)', '164': '+        k = apply_rotary_emb(k, cos, sin)', '165': '+        y = F.scaled_dot_product_attention(q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2), is_causal=True)', '166': '         y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side', '167': '         # output projection', '168': '         y = self.c_proj(y)', '169': '-        y = y / math.sqrt(24)', '170': '         return y', '171': ' ', '172': ' class MLP(nn.Module):', '173': '@@ -71,9 +175,10 @@', '174': '         super().__init__()', '175': '         self.attn = CausalSelfAttention(config)', '176': '         self.mlp = MLP(config)', '177': '+        self.attn_scale = (1 / (2 * config.n_layer)**0.5)', '178': ' ', '179': '     def forward(self, x):', '180': '-        x = x + self.attn(rmsnorm(x))', '181': '+        x = x + self.attn_scale * self.attn(rmsnorm(x))', '182': '         x = x + self.mlp(rmsnorm(x))', '183': '         return x', '184': ' ', '185': '@@ -82,7 +187,6 @@', '186': ' ', '187': ' @dataclass', '188': ' class GPTConfig:', '189': '-    block_size: int = 1024', '190': '     vocab_size: int = 50257', '191': '     n_layer: int = 12', '192': '     n_head: int = 12', '193': '@@ -96,28 +200,17 @@', '194': ' ', '195': '         self.transformer = nn.ModuleDict(dict(', '196': '             wte = nn.Embedding(config.vocab_size, config.n_embd),', '197': '-            wpe = nn.Embedding(config.block_size, config.n_embd),', '198': '             h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),', '199': '         ))', '200': '         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)', '201': "-        self.lm_head.LLMC_SKIP_INIT = 1 # don't init this one, we will tie weights", '202': '         self.transformer.wte.weight = self.lm_head.weight # https://paperswithcode.com/method/weight-tying', '203': '-        self.apply(self._init_weights)', '204': '-', '205': '-    def _init_weights(self, module):', '206': '-        # initialize the position embedding at std=0.02 to match the scale of the token embedding.', '207': "-        if isinstance(module, nn.Embedding) and not hasattr(module, 'LLMC_SKIP_INIT'):", '208': '-            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)', '209': ' ', '210': '     def forward(self, idx, targets=None, return_logits=True):', '211': '         b, t = idx.size()', '212': '-        assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"', '213': '         pos = torch.arange(0, t, dtype=torch.long, device=idx.device) # shape (t)', '214': ' ', '215': '         # forward the GPT model itself', '216': '-        tok_emb = self.transformer.wte(idx) # token embeddings of shape (b, t, n_embd)', '217': '-        pos_emb = self.transformer.wpe(pos) # position embeddings of shape (t, n_embd)', '218': '-        x = tok_emb + pos_emb', '219': '+        x = self.transformer.wte(idx) # token embeddings of shape (b, t, n_embd)', '220': ' ', '221': '         for block in self.transformer.h:', '222': '             x = block(x)', '223': '@@ -126,10 +219,12 @@', '224': '         if targets is not None:', '225': '             # if we are given some desired targets also calculate the loss', '226': '             logits = self.lm_head(x)', '227': '+            logits = logits.float() # use tf32/fp32 for logits', '228': '             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)', '229': '         else:', '230': '             # inference-time mini-optimization: only forward the lm_head on the very last position', '231': '             logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim', '232': '+            logits = logits.float() # use tf32/fp32 for logits', '233': '             loss = None', '234': ' ', '235': '         # there are performance reasons why not returning logits is prudent, if not needed', '236': '@@ -138,8 +233,11 @@', '237': ' ', '238': '         return logits, loss', '239': ' ', '240': '-    def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):', '241': '-        optimizer = torch.optim.AdamW(self.parameters(), lr=learning_rate, weight_decay=weight_decay, betas=betas)', '242': '+    def configure_optimizers(self, weight_decay, learning_rate, betas):', '243': '+        optimizer = CombinedOptimizer([', '244': '+            torch.optim.AdamW(self.lm_head.parameters(), lr=learning_rate, betas=betas, weight_decay=0),', '245': '+            OrthogonalNesterov(self.transformer.h.parameters(), lr=10 * learning_rate, momentum=0.95)', '246': '+        ])', '247': '         return optimizer', '248': ' ', '249': ' # -----------------------------------------------------------------------------', '250': '@@ -188,9 +286,8 @@', '251': '         for fname in self.files:', '252': '             shard_ntok = _peek_data_shard(fname)', '253': '             assert shard_ntok >= num_processes * B * T + 1', '254': '-            ntok_total += shard_ntok', '255': '+            ntok_total += int(shard_ntok)', '256': '         self.ntok_total = ntok_total', '257': '-        print0(f"DataLoader: total number of tokens: {ntok_total:,} across {len(self.files)} files")', '258': ' ', '259': '         # kick things off', '260': '         self.reset()', '261': '@@ -229,144 +326,151 @@', '262': ' ', '263': ' @dataclass', '264': ' class Hyperparameters:', '265': '-    # data', '266': '-    # train_files = os.environ["NANOGPT_TRAIN_FILES"] # input .bin to train on', '267': '+    # data hyperparams', '268': '     input_bin = os.environ["NANOGPT_TRAIN_FILES"]', '269': '-    # val_files = os.environ["NANOGPT_VAL_FILES"] # input .bin to eval validation loss on', '270': '     input_val_bin = os.environ["NANOGPT_VAL_FILES"]', '271': '     val_tokens = int(os.environ["NANOGPT_VAL_TOKENS"]) # how many tokens of validation data? it\'s important to keep this fixed for consistent comparisons', '272': '     model = "d12"', '273': '     # optimization', '274': '-    batch_size = 32 # batch size in tokens', '275': '+    batch_size = 64 # batch size in tokens', '276': '     sequence_length = 1024 # sequence length', '277': '-    total_batch_size = 262144# total desired batch size, in units of #tokens', '278': '-    num_iterations = 24576# number of iterations to run', '279': '-', '280': '-    learning_rate = 0.0015', '281': '-    warmup_iters = 256', '282': '+    num_iterations = 7000 # number of iterations to run', '283': '+', '284': '+    learning_rate = 0.0018', '285': '+    warmup_iters = 250', '286': '+    warmdown_iters = 2000', '287': '     weight_decay = 0.1', '288': '     grad_clip = 1.0', '289': '     # evaluation', '290': '     val_loss_every = 128 # every how many steps to evaluate val loss? 0 for only at the end', '291': '     val_max_steps = 20 # how many batches of val to average?', '292': '+    save_every = 0 # every how many steps to save the checkpoint? 0 for only at the end', '293': '+', '294': '+    accumulation = 1', '295': ' ', '296': '     output_dir = "pylog124m"', '297': '-', '298': ' ', '299': ' if __name__ == "__main__":', '300': '     import time', '301': '     import argparse', '302': '-    import tiktoken', '303': '     print0(f"Running pytorch {torch.version.__version__}")', '304': ' ', '305': '+    # parser = argparse.ArgumentParser()', '306': '+    # # file system input / output', '307': '+    # parser.add_argument("--input_bin", type=str, help="input .bin to train on")', '308': '+    # parser.add_argument("--input_val_bin", type=str, help="input .bin to eval validation loss on")', '309': '+    # parser.add_argument("--model", type=str, default="d12", help="d12|d24|d36|d48")', '310': '+    # # token layout for each step of the optimization', '311': '+    # parser.add_argument("--batch_size", type=int, default=4, help="batch size, in units of #batch dimensions")', '312': '+    # parser.add_argument("--accumulation", type=int, default=1)', '313': '+    # parser.add_argument("--sequence_length", type=int, default=64, help="sequence length")', '314': '+    # # workload (number of steps)', '315': '+    # parser.add_argument("--num_iterations", type=int, default=10, help="number of iterations to run")', '316': '+    # # optimization', '317': '+    # parser.add_argument("--learning_rate", type=float, default=1e-4, help="learning rate warmup iterations")', '318': '+    # parser.add_argument("--warmup_iters", type=int, default=0, help="learning rate warmup iterations")', '319': '+    # parser.add_argument("--warmdown_iters", type=int, default=0, help="learning rate warmdown iterations")', '320': '+    # parser.add_argument("--weight_decay", type=float, default=0.0, help="weight decay")', '321': '+    # # evaluation', '322': '+    # parser.add_argument("--val_loss_every", type=int, default=0, help="every how many steps to evaluate val loss?")', '323': '+    # parser.add_argument("--val_max_steps", type=int, default=20, help="how many batches of val to average?")', '324': '+    # parser.add_argument("--save_every", type=int, default=0, help="every how many steps to save the checkpoint")', '325': '+    # args = parser.parse_args()', '326': '     args = Hyperparameters()', '327': ' ', '328': '     # args error checking and convenience variables', '329': '     B, T = args.batch_size, args.sequence_length', '330': '-    assert 1 <= T <= 1024', '331': '     assert args.model in {"d12", "d24", "d36", "d48"}', '332': ' ', '333': '     # set up DDP (distributed data parallel). torchrun sets this env variable', '334': '-    # use of DDP atm demands CUDA, we set the device appropriately according to rank', '335': '-    assert torch.cuda.is_available(), "for now i think we need CUDA for DDP"', '336': "-    init_process_group(backend='nccl')", '337': '+    assert torch.cuda.is_available()', '338': "+    dist.init_process_group(backend='nccl')", '339': "     ddp_rank = int(os.environ['RANK'])", '340': "     ddp_local_rank = int(os.environ['LOCAL_RANK'])", '341': "     ddp_world_size = int(os.environ['WORLD_SIZE'])", '342': "     device = f'cuda:{ddp_local_rank}'", '343': '     torch.cuda.set_device(device)', '344': '-    master_process = ddp_rank == 0 # this process will do logging, checkpointing etc.', '345': '-    seed_offset = 0 # each process gets the exact same seed', '346': '     print(f"using device: {device}")', '347': '-', '348': '-    tokens_per_fwdbwd = B * T * ddp_world_size', '349': '-    assert args.total_batch_size == tokens_per_fwdbwd', '350': '-', '351': '-    # set up a context manager following the desired dtype and device', '352': "-    ctx = torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16)", '353': '-', '354': '-    # init (and write) the tokenizer', '355': '-    enc = tiktoken.get_encoding("gpt2")', '356': '+    master_process = (ddp_rank == 0) # this process will do logging, checkpointing etc.', '357': '+', '358': '+    # load tokens', '359': '+    train_loader = DistributedDataLoader(args.input_bin, B, T, ddp_rank, ddp_world_size)', '360': '+    print0(f"Training DataLoader: total number of tokens: {train_loader.ntok_total} across {len(train_loader.files)} files")', '361': '+    val_loader = DistributedDataLoader(args.input_val_bin, B, T, ddp_rank, ddp_world_size)', '362': '+    print0(f"Validation DataLoader: total number of tokens: {val_loader.ntok_total} across {len(val_loader.files)} files")', '363': '+    x, y = train_loader.next_batch()', '364': ' ', '365': '     # init the model from scratch', '366': '+    num_vocab = 50257', '367': '     model_config = {', '368': '-        "d12": GPTConfig(block_size=1024, vocab_size=50257, n_layer=12, n_head=12, n_embd=768),', '369': '-        "d24": GPTConfig(block_size=1024, vocab_size=50257, n_layer=24, n_head=16, n_embd=1024),', '370': '-        "d36": GPTConfig(block_size=1024, vocab_size=50257, n_layer=36, n_head=20, n_embd=1280),', '371': '-        "d48": GPTConfig(block_size=1024, vocab_size=50257, n_layer=48, n_head=25, n_embd=1600),', '372': '+        "d12": GPTConfig(vocab_size=num_vocab, n_layer=12, n_head=12, n_embd=768),', '373': '+        "d24": GPTConfig(vocab_size=num_vocab, n_layer=24, n_head=16, n_embd=1024),', '374': '+        "d36": GPTConfig(vocab_size=num_vocab, n_layer=36, n_head=20, n_embd=1280),', '375': '+        "d48": GPTConfig(vocab_size=num_vocab, n_layer=48, n_head=25, n_embd=1600),', '376': '     }[args.model]', '377': '     model = GPT(model_config)', '378': '-    model = model.train()#.cuda()', '379': '+    model = model.cuda()', '380': '     if hasattr(config, "coordinate_descent_tuning"):', '381': '         config.coordinate_descent_tuning = True # suggested by @Chillee', '382': '     print0("compiling the model...")', '383': '-    model = torch.compile(model).cuda()', '384': '-', '385': '-    # load tokens', '386': '-    train_loader = DistributedDataLoader(args.input_bin, B, T, ddp_rank, ddp_world_size)', '387': '-    val_loader = None', '388': '-    if args.input_val_bin:', '389': '-        val_loader = DistributedDataLoader(args.input_val_bin, B, T, ddp_rank, ddp_world_size)', '390': '-    x, y = train_loader.next_batch()', '391': '+    model = torch.compile(model)', '392': ' ', '393': '     # here we wrap model into DDP container', '394': '     model = DDP(model, device_ids=[ddp_local_rank])', '395': '     raw_model = model.module # always contains the "raw" unwrapped model', '396': ' ', '397': '+    # set up a context manager following the desired dtype and device', '398': "+    ctx = torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16)", '399': '+', '400': '     # init the optimizer', '401': '     optimizer = raw_model.configure_optimizers(weight_decay=args.weight_decay,', '402': '-                                               learning_rate=args.learning_rate, betas=(0.9, 0.95),', '403': '-                                               device_type=device)', '404': '-', '405': '-    # learning rate decay scheduler (cosine with warmup)', '406': '+                                               learning_rate=args.learning_rate, betas=(0.9, 0.95))', '407': '+', '408': '+    # learning rate decay scheduler (linear warmup and warmdown)', '409': '     def get_lr(it):', '410': '         assert it <= args.num_iterations', '411': '         # 1) linear warmup for warmup_iters steps', '412': '         if it < args.warmup_iters:', '413': '-            return args.learning_rate * (it+1) / args.warmup_iters', '414': '-        # 2) linear decay down to min learning rate', '415': '-        decay_ratio = (it - args.warmup_iters) / (args.num_iterations - args.warmup_iters)', '416': '-        assert 0 <= decay_ratio <= 1', '417': '-        return (0.1 + (1 - decay_ratio)) / (0.1 + 1) * args.learning_rate', '418': '+            return (it+1) / args.warmup_iters', '419': '+        # 2) constant lr for a while', '420': '+        elif it < args.num_iterations - args.warmdown_iters:', '421': '+            return 1.0', '422': '+        # 3) linear warmdown', '423': '+        else:', '424': '+            decay_ratio = (args.num_iterations - it) / args.warmdown_iters', '425': '+            return decay_ratio', '426': ' ', '427': '     run_id = str(uuid.uuid4())', '428': '-', '429': '-    # create the logging directory if it does not exist', '430': '-    logfile = None', '431': '-    if master_process and args.output_dir:', '432': '-        os.makedirs(args.output_dir, exist_ok=True)', '433': '-        logfile = os.path.join(args.output_dir, "%s.log" % run_id)', '434': '-        # create the log file "main.log" inside it, and wipe it clean', '435': '+    if master_process:', '436': "+        os.makedirs('logs/%s' % run_id, exist_ok=True)", '437': "+        logfile = 'logs/%s/log.txt' % run_id", '438': '+        # create the empty log file', '439': '         with open(logfile, "w") as f:', '440': '             pass', '441': ' ', '442': '-    timings = []', '443': '-    norm = -1.0   # dummy value to print in inference-only mode', '444': '     training_time_ms = 0', '445': '     # start the clock', '446': '     torch.cuda.synchronize()', '447': '-    t_val_loss_0 = time.time()', '448': '+    t0 = time.time()', '449': '     for step in range(args.num_iterations + 1):', '450': '-        t0 = time.time()', '451': '         last_step = (step == args.num_iterations)', '452': ' ', '453': '         # once in a while evaluate the validation dataset', '454': '-        if (args.val_loss_every > 0 \\', '455': '-            and (step % args.val_loss_every == 0 or last_step)) \\', '456': '-            and (val_loader is not None):', '457': '+        if (last_step or (args.val_loss_every > 0 and step % args.val_loss_every == 0)):', '458': '             # stop the clock', '459': '             torch.cuda.synchronize()', '460': '-            training_time_ms += 1000 * (time.time() - t_val_loss_0)', '461': '+            training_time_ms += 1000 * (time.time() - t0)', '462': '             model.eval()', '463': '             val_loader.reset()', '464': '-            with torch.no_grad():', '465': '-                val_loss = 0.0', '466': '-                for _ in range(args.val_max_steps):', '467': '+            val_loss = 0.0', '468': '+            for _ in range(args.val_max_steps):', '469': '+                with torch.no_grad(): # I want to use ctx here but it causes a torch.compile error', '470': '                     x_val, y_val = val_loader.next_batch()', '471': '                     _, loss = model(x_val, y_val, return_logits=False)', '472': '-                    val_loss += loss.item()', '473': '-                val_loss /= args.val_max_steps', '474': '-            # log to console and to file', '475': '+                    val_loss += loss', '476': '+            dist.all_reduce(val_loss, op=dist.ReduceOp.AVG)', '477': '+            val_loss /= args.val_max_steps', '478': '+            # log val loss to console and to logfile', '479': '             print0(f"val loss {val_loss}")', '480': '             if master_process:', '481': "                 print(f'step:{step}/{args.num_iterations} val_loss:{val_loss:.4f} train_time:{training_time_ms:.0f}ms')", '482': '@@ -374,7 +478,18 @@', '483': "                     f.write(f'step:{step}/{args.num_iterations} val_loss:{val_loss:.4f} train_time:{training_time_ms:.0f}ms\\n')", '484': '             # start the clock again', '485': '             torch.cuda.synchronize()', '486': '-            t_val_loss_0 = time.time()', '487': '+            t0 = time.time()', '488': '+', '489': '+        # save the state of the training process', '490': '+        if master_process and (last_step or (args.save_every > 0 and step % args.save_every == 0)):', '491': '+            # stop the clock', '492': '+            torch.cuda.synchronize()', '493': '+            training_time_ms += 1000 * (time.time() - t0)', '494': '+            log = dict(step=step, args=args.__dict__, code=code)', '495': "+            torch.save(log, 'logs/%s/state_step%06d.pt' % (run_id, step))", '496': '+            # start the clock again', '497': '+            torch.cuda.synchronize()', '498': '+            t0 = time.time()', '499': ' ', '500': '         # bit confusing: we want to make sure to eval on 0th iteration', '501': '         # but also after the very last iteration. so we loop for step <= num_iterations', '502': '@@ -383,54 +498,42 @@', '503': '         if last_step:', '504': '             break', '505': ' ', '506': '+        torch.cuda.synchronize()', '507': '+        t_train_begin = time.time()', '508': '         # --------------- TRAINING SECTION BEGIN -----------------', '509': '         model.train()', '510': '-        # forward pass', '511': '-        with ctx:', '512': '-            _, loss = model(x, y, return_logits=False)', '513': '-        # advance the dataset for the next batch', '514': '-        x, y = train_loader.next_batch()', '515': '-        # backward pass', '516': '-        loss.backward()', '517': '-        norm = torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)', '518': '+        for _ in range(args.accumulation):', '519': '+            # forward pass', '520': '+            with ctx:', '521': '+                _, loss = model(x, y, return_logits=False)', '522': '+                train_loss = loss.detach()', '523': '+            # advance the dataset for the next batch', '524': '+            x, y = train_loader.next_batch()', '525': '+            # backward pass', '526': '+            loss.backward()', '527': '+        for p in model.parameters():', '528': '+            p.grad /= args.accumulation', '529': '         # determine and set the learning rate for this iteration', '530': '-        lr = get_lr(step)', '531': '-        for param_group in optimizer.param_groups:', '532': "-            param_group['lr'] = lr", '533': '+        lr_scale = get_lr(step)', '534': '+        optimizer.scale_lrs(lr_scale)', '535': '         # step the optimizer', '536': '         optimizer.step()', '537': '         optimizer.zero_grad(set_to_none=True)', '538': '         # --------------- TRAINING SECTION END -------------------', '539': '         # everything that follows now is just diagnostics, prints, logging, etc.', '540': '-', '541': '         torch.cuda.synchronize()', '542': '-        # time and print', '543': '-        t1 = time.time()', '544': '-        # the 0th iteration is often an outlier (much slower) => skip logging it', '545': '-        tokens_per_second = ddp_world_size * B * T / (t1-t0)', '546': '-        lossf = loss.item() # keep track of the mean loss', '547': '-        print0(f"step {step+1:4d}/{args.num_iterations} | train loss {lossf:.6f} | norm {norm:.4f} | lr {lr:.2e} | ({(t1-t0)*1000:.2f} ms | {tokens_per_second:.0f} tok/s)")', '548': '-        # log to logile', '549': '-        if master_process and logfile is not None:', '550': '+        t_train_end = time.time()', '551': '+', '552': '+        dist.all_reduce(train_loss, op=dist.ReduceOp.AVG)', '553': '+        tokens_per_second = ddp_world_size * B * T / (t_train_end - t_train_begin)', '554': '+        print0(f"step {step+1:4d}/{args.num_iterations} | train loss {train_loss.item():.4f} | lr_scale {lr_scale:.2e} | ({(t_train_end - t_train_begin)*1000:.2f} ms | {tokens_per_second:.0f} tok/s)")', '555': '+        # log training loss to logfile', '556': '+        if master_process:', '557': '             with open(logfile, "a") as f:', '558': '-                f.write("s:%d trl:%f\\n" % (step, lossf))', '559': '-', '560': '-        # keep track of smooth timings, last 20 iterations', '561': '-        if step > 0 and step > args.num_iterations - 20:', '562': '-            timings.append(t1-t0)', '563': '-', '564': '-    # print the average of the last 20 timings, to get something smooth-ish', '565': '-    timings = timings[-20:]', '566': '-    print0(f"final {len(timings)} iters avg: {np.mean(timings)*1000:.3f}ms")', '567': '+                f.write("s:%d trl:%f\\n" % (step, train_loss.item()))', '568': '+', '569': '     print0(f"peak memory consumption: {torch.cuda.max_memory_allocated() // 1024 // 1024} MiB")', '570': '-', '571': '-    # -------------------------------------------------------------------------', '572': '-', '573': '-    if master_process:', '574': '-        log = dict(code=code, args=args.__dict__)', '575': "-        os.makedirs('logs', exist_ok=True)", '576': "-        torch.save(log, 'logs/%s.pt' % run_id)", '577': ' ', '578': '     # -------------------------------------------------------------------------', '579': '     # clean up nice', '580': '-    destroy_process_group()', '581': '+    dist.destroy_process_group()'}
+  Context Changes: []
+  State: record_2 [RStateStatus.COMPLETED]
+  Intent: None
+  Args Diff vs Current: 
+  Code Changes: {'1': '--- previous', '2': '+++ current', '3': '@@ -1,7 +1,6 @@', '4': ' import os', '5': ' import sys', '6': ' import uuid', '7': '-import math', '8': ' import glob', '9': ' from dataclasses import dataclass', '10': ' ', '11': '@@ -9,17 +8,91 @@', '12': ' import torch', '13': ' from torch import nn', '14': ' import torch.nn.functional as F', '15': '+import torch.distributed as dist', '16': ' import torch._inductor.config as config', '17': ' from torch.nn.parallel import DistributedDataParallel as DDP', '18': '-from torch.distributed import init_process_group, destroy_process_group', '19': ' ', '20': ' with open(sys.argv[0]) as f:', '21': '     code = f.read()', '22': ' ', '23': ' # -----------------------------------------------------------------------------', '24': '+# OrthgonalNesterov optimizer', '25': '+', '26': '+class OrthogonalNesterov(torch.optim.Optimizer):', '27': '+    def __init__(self, params, lr=0.02, momentum=0.9, nesterov=True, zeropower_iters=5):', '28': '+        defaults = dict(lr=lr, momentum=momentum, nesterov=nesterov, zeropower_iters=zeropower_iters)', '29': '+        super().__init__(params, defaults)', '30': '+', '31': '+    def step(self):', '32': '+        for group in self.param_groups:', '33': "+            lr = group['lr']", '34': "+            momentum = group['momentum']", '35': "+            for p in group['params']:", '36': '+                g = p.grad', '37': '+                if g is None:', '38': '+                    continue', '39': '+                state = self.state[p]', '40': "+                state['steps'] = state.get('steps', 0) + 1", '41': "+                if 'momentum_buffer' not in state:", '42': "+                    state['momentum_buffer'] = torch.zeros_like(g)", '43': "+                buf = state['momentum_buffer']", '44': '+                buf.mul_(momentum).add_(g)', '45': "+                g = g.add(buf, alpha=momentum) if group['nesterov'] else buf", '46': "+                update = zeroth_power_via_newtonschulz5(g, steps=group['zeropower_iters'])", '47': '+                p.data.add_(update, alpha=-lr)', '48': '+', '49': '+@torch.compile', '50': '+def zeroth_power_via_newtonschulz5(G, steps=5, eps=1e-7):', '51': '+    r"""', '52': '+    Newton-Schulz iteration to compute the zeroth power / orthogonalization of G. We opt to use a', '53': '+    quintic iteration whose coefficients are selected to maximize the slope at zero. It turns out', '54': '+    to be empirically effective to keep increasing the slope of the quintic at zero even beyond the', '55': '+    point where it no longer converges to one everywhere after repeated application (so long as it', '56': '+    stays relatively close to 1 across the interval). Our usage of a Newton-Schulz iteration as the', '57': '+    orthogonalization method traces to Bernstein & Newhouse (2024) https://arxiv.org/abs/2409.20325', '58': '+    who suggested its use for computing the preconditioners of Shampoo.', '59': '+    """', '60': '+    assert len(G.shape) == 2', '61': '+    a, b, c = (3.4445, -4.7750,  2.0315)', '62': '+    X = G.bfloat16() / (G.norm() + eps) # ensure top singular value <= 1', '63': '+    if G.size(0) > G.size(1):', '64': '+        X = X.T', '65': '+    for _ in range(steps):', '66': '+        A = X @ X.T', '67': '+        B = A @ X', '68': '+        X = a * X + b * B + c * A @ B', '69': '+    if G.size(0) > G.size(1):', '70': '+        X = X.T', '71': '+    return X.to(G.dtype)', '72': '+', '73': '+class CombinedOptimizer:', '74': '+', '75': '+    def __init__(self, optimizers):', '76': '+        assert all(len(opt.param_groups) == 1 for opt in optimizers)', '77': '+        self.optimizers = optimizers', '78': '+        self.param_groups = [pg for opt in self.optimizers for pg in opt.param_groups]', '79': "+        self.base_lrs = [opt.param_groups[0]['lr'] for opt in self.optimizers]", '80': '+', '81': '+    def step(self):', '82': '+        for opt in self.optimizers:', '83': '+            opt.step()', '84': '+', '85': '+    def zero_grad(self, **kwargs):', '86': '+        for opt in self.optimizers:', '87': '+            opt.zero_grad(**kwargs)', '88': '+', '89': '+    def scale_lrs(self, lr_scale):', '90': '+        for base_lr, opt in zip(self.base_lrs, self.optimizers):', '91': "+            opt.param_groups[0]['lr'] = base_lr * lr_scale", '92': '+', '93': '+    def state_dict(self):', '94': '+        return [opt.state_dict() for opt in self.optimizers]', '95': '+', '96': '+# -----------------------------------------------------------------------------', '97': ' # PyTorch nn.Module definitions for the GPT-2 model', '98': ' ', '99': ' class Rotary(torch.nn.Module):', '100': '+', '101': '     def __init__(self, dim, base=10000):', '102': '         super().__init__()', '103': '         inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2).float() / dim))', '104': '@@ -102,7 +175,7 @@', '105': '         super().__init__()', '106': '         self.attn = CausalSelfAttention(config)', '107': '         self.mlp = MLP(config)', '108': '-        self.attn_scale = (1 / math.sqrt(2 * config.n_layer))', '109': '+        self.attn_scale = (1 / (2 * config.n_layer)**0.5)', '110': ' ', '111': '     def forward(self, x):', '112': '         x = x + self.attn_scale * self.attn(rmsnorm(x))', '113': '@@ -114,7 +187,6 @@', '114': ' ', '115': ' @dataclass', '116': ' class GPTConfig:', '117': '-    block_size: int = 1024', '118': '     vocab_size: int = 50257', '119': '     n_layer: int = 12', '120': '     n_head: int = 12', '121': '@@ -135,7 +207,6 @@', '122': ' ', '123': '     def forward(self, idx, targets=None, return_logits=True):', '124': '         b, t = idx.size()', '125': '-        assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"', '126': '         pos = torch.arange(0, t, dtype=torch.long, device=idx.device) # shape (t)', '127': ' ', '128': '         # forward the GPT model itself', '129': '@@ -148,10 +219,12 @@', '130': '         if targets is not None:', '131': '             # if we are given some desired targets also calculate the loss', '132': '             logits = self.lm_head(x)', '133': '+            logits = logits.float() # use tf32/fp32 for logits', '134': '             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)', '135': '         else:', '136': '             # inference-time mini-optimization: only forward the lm_head on the very last position', '137': '             logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim', '138': '+            logits = logits.float() # use tf32/fp32 for logits', '139': '             loss = None', '140': ' ', '141': '         # there are performance reasons why not returning logits is prudent, if not needed', '142': '@@ -160,8 +233,11 @@', '143': ' ', '144': '         return logits, loss', '145': ' ', '146': '-    def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):', '147': '-        optimizer = torch.optim.AdamW(self.parameters(), lr=learning_rate, weight_decay=weight_decay, betas=betas)', '148': '+    def configure_optimizers(self, weight_decay, learning_rate, betas):', '149': '+        optimizer = CombinedOptimizer([', '150': '+            torch.optim.AdamW(self.lm_head.parameters(), lr=learning_rate, betas=betas, weight_decay=0),', '151': '+            OrthogonalNesterov(self.transformer.h.parameters(), lr=10 * learning_rate, momentum=0.95)', '152': '+        ])', '153': '         return optimizer', '154': ' ', '155': ' # -----------------------------------------------------------------------------', '156': '@@ -210,9 +286,8 @@', '157': '         for fname in self.files:', '158': '             shard_ntok = _peek_data_shard(fname)', '159': '             assert shard_ntok >= num_processes * B * T + 1', '160': '-            ntok_total += shard_ntok', '161': '+            ntok_total += int(shard_ntok)', '162': '         self.ntok_total = ntok_total', '163': '-        print0(f"DataLoader: total number of tokens: {ntok_total:,} across {len(self.files)} files")', '164': ' ', '165': '         # kick things off', '166': '         self.reset()', '167': '@@ -255,21 +330,23 @@', '168': '     input_bin = os.environ["NANOGPT_TRAIN_FILES"]', '169': '     input_val_bin = os.environ["NANOGPT_VAL_FILES"]', '170': '     val_tokens = int(os.environ["NANOGPT_VAL_TOKENS"]) # how many tokens of validation data? it\'s important to keep this fixed for consistent comparisons', '171': '-', '172': '     model = "d12"', '173': '     # optimization', '174': '     batch_size = 64 # batch size in tokens', '175': '     sequence_length = 1024 # sequence length', '176': '-    total_batch_size = 524288', '177': '-    num_iterations = 9536 # number of iterations to run', '178': '-    val_loss_every = 128', '179': '+    num_iterations = 7000 # number of iterations to run', '180': '+', '181': '+    learning_rate = 0.0018', '182': '+    warmup_iters = 250', '183': '+    warmdown_iters = 2000', '184': '     weight_decay = 0.1', '185': '-    learning_rate = 0.0018', '186': '-    warmup_iters = 256', '187': '-    warmdown_iters = 2000', '188': '-    save_every = 0', '189': '-', '190': '-    val_max_steps = 20', '191': '+    grad_clip = 1.0', '192': '+    # evaluation', '193': '+    val_loss_every = 128 # every how many steps to evaluate val loss? 0 for only at the end', '194': '+    val_max_steps = 20 # how many batches of val to average?', '195': '+    save_every = 0 # every how many steps to save the checkpoint? 0 for only at the end', '196': '+', '197': '+    accumulation = 1', '198': ' ', '199': '     output_dir = "pylog124m"', '200': ' ', '201': '@@ -278,113 +355,122 @@', '202': '     import argparse', '203': '     print0(f"Running pytorch {torch.version.__version__}")', '204': ' ', '205': '+    # parser = argparse.ArgumentParser()', '206': '+    # # file system input / output', '207': '+    # parser.add_argument("--input_bin", type=str, help="input .bin to train on")', '208': '+    # parser.add_argument("--input_val_bin", type=str, help="input .bin to eval validation loss on")', '209': '+    # parser.add_argument("--model", type=str, default="d12", help="d12|d24|d36|d48")', '210': '+    # # token layout for each step of the optimization', '211': '+    # parser.add_argument("--batch_size", type=int, default=4, help="batch size, in units of #batch dimensions")', '212': '+    # parser.add_argument("--accumulation", type=int, default=1)', '213': '+    # parser.add_argument("--sequence_length", type=int, default=64, help="sequence length")', '214': '+    # # workload (number of steps)', '215': '+    # parser.add_argument("--num_iterations", type=int, default=10, help="number of iterations to run")', '216': '+    # # optimization', '217': '+    # parser.add_argument("--learning_rate", type=float, default=1e-4, help="learning rate warmup iterations")', '218': '+    # parser.add_argument("--warmup_iters", type=int, default=0, help="learning rate warmup iterations")', '219': '+    # parser.add_argument("--warmdown_iters", type=int, default=0, help="learning rate warmdown iterations")', '220': '+    # parser.add_argument("--weight_decay", type=float, default=0.0, help="weight decay")', '221': '+    # # evaluation', '222': '+    # parser.add_argument("--val_loss_every", type=int, default=0, help="every how many steps to evaluate val loss?")', '223': '+    # parser.add_argument("--val_max_steps", type=int, default=20, help="how many batches of val to average?")', '224': '+    # parser.add_argument("--save_every", type=int, default=0, help="every how many steps to save the checkpoint")', '225': '+    # args = parser.parse_args()', '226': '     args = Hyperparameters()', '227': ' ', '228': '     # args error checking and convenience variables', '229': '     B, T = args.batch_size, args.sequence_length', '230': '-    assert 1 <= T <= 1024', '231': '     assert args.model in {"d12", "d24", "d36", "d48"}', '232': ' ', '233': '     # set up DDP (distributed data parallel). torchrun sets this env variable', '234': '-    # use of DDP atm demands CUDA, we set the device appropriately according to rank', '235': '-    assert torch.cuda.is_available(), "for now i think we need CUDA for DDP"', '236': "-    init_process_group(backend='nccl')", '237': '+    assert torch.cuda.is_available()', '238': "+    dist.init_process_group(backend='nccl')", '239': "     ddp_rank = int(os.environ['RANK'])", '240': "     ddp_local_rank = int(os.environ['LOCAL_RANK'])", '241': "     ddp_world_size = int(os.environ['WORLD_SIZE'])", '242': "     device = f'cuda:{ddp_local_rank}'", '243': '     torch.cuda.set_device(device)', '244': '-    master_process = ddp_rank == 0 # this process will do logging, checkpointing etc.', '245': '-    seed_offset = 0 # each process gets the exact same seed', '246': '     print(f"using device: {device}")', '247': '-', '248': '-    tokens_per_fwdbwd = B * T * ddp_world_size', '249': '-    assert args.total_batch_size == tokens_per_fwdbwd', '250': '-', '251': '-    # set up a context manager following the desired dtype and device', '252': "-    ctx = torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16)", '253': '+    master_process = (ddp_rank == 0) # this process will do logging, checkpointing etc.', '254': '+', '255': '+    # load tokens', '256': '+    train_loader = DistributedDataLoader(args.input_bin, B, T, ddp_rank, ddp_world_size)', '257': '+    print0(f"Training DataLoader: total number of tokens: {train_loader.ntok_total} across {len(train_loader.files)} files")', '258': '+    val_loader = DistributedDataLoader(args.input_val_bin, B, T, ddp_rank, ddp_world_size)', '259': '+    print0(f"Validation DataLoader: total number of tokens: {val_loader.ntok_total} across {len(val_loader.files)} files")', '260': '+    x, y = train_loader.next_batch()', '261': ' ', '262': '     # init the model from scratch', '263': '+    num_vocab = 50257', '264': '     model_config = {', '265': '-        "d12": GPTConfig(block_size=1024, vocab_size=50257, n_layer=12, n_head=12, n_embd=768),', '266': '-        "d24": GPTConfig(block_size=1024, vocab_size=50257, n_layer=24, n_head=16, n_embd=1024),', '267': '-        "d36": GPTConfig(block_size=1024, vocab_size=50257, n_layer=36, n_head=20, n_embd=1280),', '268': '-        "d48": GPTConfig(block_size=1024, vocab_size=50257, n_layer=48, n_head=25, n_embd=1600),', '269': '+        "d12": GPTConfig(vocab_size=num_vocab, n_layer=12, n_head=12, n_embd=768),', '270': '+        "d24": GPTConfig(vocab_size=num_vocab, n_layer=24, n_head=16, n_embd=1024),', '271': '+        "d36": GPTConfig(vocab_size=num_vocab, n_layer=36, n_head=20, n_embd=1280),', '272': '+        "d48": GPTConfig(vocab_size=num_vocab, n_layer=48, n_head=25, n_embd=1600),', '273': '     }[args.model]', '274': '     model = GPT(model_config)', '275': '-    model = model.train().cuda()', '276': '+    model = model.cuda()', '277': '     if hasattr(config, "coordinate_descent_tuning"):', '278': '         config.coordinate_descent_tuning = True # suggested by @Chillee', '279': '     print0("compiling the model...")', '280': '     model = torch.compile(model)', '281': ' ', '282': '-    # load tokens', '283': '-    train_loader = DistributedDataLoader(args.input_bin, B, T, ddp_rank, ddp_world_size)', '284': '-    val_loader = None', '285': '-    if args.input_val_bin:', '286': '-        val_loader = DistributedDataLoader(args.input_val_bin, B, T, ddp_rank, ddp_world_size)', '287': '-    x, y = train_loader.next_batch()', '288': '-', '289': '     # here we wrap model into DDP container', '290': '     model = DDP(model, device_ids=[ddp_local_rank])', '291': '     raw_model = model.module # always contains the "raw" unwrapped model', '292': ' ', '293': '+    # set up a context manager following the desired dtype and device', '294': "+    ctx = torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16)", '295': '+', '296': '     # init the optimizer', '297': '     optimizer = raw_model.configure_optimizers(weight_decay=args.weight_decay,', '298': '-                                               learning_rate=args.learning_rate, betas=(0.9, 0.95),', '299': '-                                               device_type=device)', '300': '+                                               learning_rate=args.learning_rate, betas=(0.9, 0.95))', '301': ' ', '302': '     # learning rate decay scheduler (linear warmup and warmdown)', '303': '     def get_lr(it):', '304': '         assert it <= args.num_iterations', '305': '         # 1) linear warmup for warmup_iters steps', '306': '         if it < args.warmup_iters:', '307': '-            return args.learning_rate * (it+1) / args.warmup_iters', '308': '+            return (it+1) / args.warmup_iters', '309': '         # 2) constant lr for a while', '310': '         elif it < args.num_iterations - args.warmdown_iters:', '311': '-            return args.learning_rate', '312': '+            return 1.0', '313': '         # 3) linear warmdown', '314': '         else:', '315': '             decay_ratio = (args.num_iterations - it) / args.warmdown_iters', '316': '-            return args.learning_rate * decay_ratio', '317': '+            return decay_ratio', '318': ' ', '319': '     run_id = str(uuid.uuid4())', '320': '-', '321': '-    # create the logging directory if it does not exist', '322': '-    logfile = None', '323': '-    if master_process and args.output_dir:', '324': '-        os.makedirs(args.output_dir, exist_ok=True)', '325': '-        logfile = os.path.join(args.output_dir, "%s.log" % run_id)', '326': '-        # create the log file "main.log" inside it, and wipe it clean', '327': '+    if master_process:', '328': "+        os.makedirs('logs/%s' % run_id, exist_ok=True)", '329': "+        logfile = 'logs/%s/log.txt' % run_id", '330': '+        # create the empty log file', '331': '         with open(logfile, "w") as f:', '332': '             pass', '333': ' ', '334': '-    timings = []', '335': '     training_time_ms = 0', '336': '     # start the clock', '337': '     torch.cuda.synchronize()', '338': '-    t_val_loss_0 = time.time()', '339': '+    t0 = time.time()', '340': '     for step in range(args.num_iterations + 1):', '341': '-        t0 = time.time()', '342': '         last_step = (step == args.num_iterations)', '343': ' ', '344': '         # once in a while evaluate the validation dataset', '345': '-        if (args.val_loss_every > 0 \\', '346': '-            and (step % args.val_loss_every == 0 or last_step)) \\', '347': '-            and (val_loader is not None):', '348': '+        if (last_step or (args.val_loss_every > 0 and step % args.val_loss_every == 0)):', '349': '             # stop the clock', '350': '             torch.cuda.synchronize()', '351': '-            training_time_ms += 1000 * (time.time() - t_val_loss_0)', '352': '+            training_time_ms += 1000 * (time.time() - t0)', '353': '             model.eval()', '354': '             val_loader.reset()', '355': '-            with torch.no_grad():', '356': '-                val_loss = 0.0', '357': '-                for _ in range(args.val_max_steps):', '358': '+            val_loss = 0.0', '359': '+            for _ in range(args.val_max_steps):', '360': '+                with torch.no_grad(): # I want to use ctx here but it causes a torch.compile error', '361': '                     x_val, y_val = val_loader.next_batch()', '362': '                     _, loss = model(x_val, y_val, return_logits=False)', '363': '-                    val_loss += loss.item()', '364': '-                val_loss /= args.val_max_steps', '365': '-            # log to console and to file', '366': '+                    val_loss += loss', '367': '+            dist.all_reduce(val_loss, op=dist.ReduceOp.AVG)', '368': '+            val_loss /= args.val_max_steps', '369': '+            # log val loss to console and to logfile', '370': '             print0(f"val loss {val_loss}")', '371': '             if master_process:', '372': "                 print(f'step:{step}/{args.num_iterations} val_loss:{val_loss:.4f} train_time:{training_time_ms:.0f}ms')", '373': '@@ -392,7 +478,18 @@', '374': "                     f.write(f'step:{step}/{args.num_iterations} val_loss:{val_loss:.4f} train_time:{training_time_ms:.0f}ms\\n')", '375': '             # start the clock again', '376': '             torch.cuda.synchronize()', '377': '-            t_val_loss_0 = time.time()', '378': '+            t0 = time.time()', '379': '+', '380': '+        # save the state of the training process', '381': '+        if master_process and (last_step or (args.save_every > 0 and step % args.save_every == 0)):', '382': '+            # stop the clock', '383': '+            torch.cuda.synchronize()', '384': '+            training_time_ms += 1000 * (time.time() - t0)', '385': '+            log = dict(step=step, args=args.__dict__, code=code)', '386': "+            torch.save(log, 'logs/%s/state_step%06d.pt' % (run_id, step))", '387': '+            # start the clock again', '388': '+            torch.cuda.synchronize()', '389': '+            t0 = time.time()', '390': ' ', '391': '         # bit confusing: we want to make sure to eval on 0th iteration', '392': '         # but also after the very last iteration. so we loop for step <= num_iterations', '393': '@@ -401,60 +498,42 @@', '394': '         if last_step:', '395': '             break', '396': ' ', '397': '+        torch.cuda.synchronize()', '398': '+        t_train_begin = time.time()', '399': '         # --------------- TRAINING SECTION BEGIN -----------------', '400': '         model.train()', '401': '-        # forward pass', '402': '-        with ctx:', '403': '-            _, loss = model(x, y, return_logits=False)', '404': '-        # advance the dataset for the next batch', '405': '-        x, y = train_loader.next_batch()', '406': '-        # backward pass', '407': '-        loss.backward()', '408': '+        for _ in range(args.accumulation):', '409': '+            # forward pass', '410': '+            with ctx:', '411': '+                _, loss = model(x, y, return_logits=False)', '412': '+                train_loss = loss.detach()', '413': '+            # advance the dataset for the next batch', '414': '+            x, y = train_loader.next_batch()', '415': '+            # backward pass', '416': '+            loss.backward()', '417': '         for p in model.parameters():', '418': '-            p.grad = p.grad / (p.grad.norm() + 1e-6)', '419': '+            p.grad /= args.accumulation', '420': '         # determine and set the learning rate for this iteration', '421': '-        lr = get_lr(step)', '422': '-        for param_group in optimizer.param_groups:', '423': "-            param_group['lr'] = lr", '424': '+        lr_scale = get_lr(step)', '425': '+        optimizer.scale_lrs(lr_scale)', '426': '         # step the optimizer', '427': '         optimizer.step()', '428': '         optimizer.zero_grad(set_to_none=True)', '429': '         # --------------- TRAINING SECTION END -------------------', '430': '         # everything that follows now is just diagnostics, prints, logging, etc.', '431': '-', '432': '         torch.cuda.synchronize()', '433': '-        # time and print', '434': '-        t1 = time.time()', '435': '-        # the 0th iteration is often an outlier (much slower) => skip logging it', '436': '-        tokens_per_second = ddp_world_size * B * T / (t1-t0)', '437': '-        lossf = loss.item() # keep track of the mean loss', '438': '-        print0(f"step {step+1:4d}/{args.num_iterations} | train loss {lossf:.6f} | lr {lr:.2e} | ({(t1-t0)*1000:.2f} ms | {tokens_per_second:.0f} tok/s)")', '439': '-        # log to logile', '440': '-        if master_process and logfile is not None:', '441': '+        t_train_end = time.time()', '442': '+', '443': '+        dist.all_reduce(train_loss, op=dist.ReduceOp.AVG)', '444': '+        tokens_per_second = ddp_world_size * B * T / (t_train_end - t_train_begin)', '445': '+        print0(f"step {step+1:4d}/{args.num_iterations} | train loss {train_loss.item():.4f} | lr_scale {lr_scale:.2e} | ({(t_train_end - t_train_begin)*1000:.2f} ms | {tokens_per_second:.0f} tok/s)")', '446': '+        # log training loss to logfile', '447': '+        if master_process:', '448': '             with open(logfile, "a") as f:', '449': '-                f.write("s:%d trl:%f\\n" % (step, lossf))', '450': '-', '451': '-        # keep track of smooth timings, last 20 iterations', '452': '-        if step > 0 and step > args.num_iterations - 20:', '453': '-            timings.append(t1-t0)', '454': '-', '455': '-        if master_process and (args.save_every > 0 and step % args.save_every == 0):', '456': '-            log = dict(code=code, args=args.__dict__)', '457': "-            os.makedirs('logs/%s' % run_id, exist_ok=True)", '458': "-            torch.save(log, 'logs/%s/model_step%06d.pt' % (run_id, step))", '459': '-', '460': '-    # print the average of the last 20 timings, to get something smooth-ish', '461': '-    timings = timings[-20:]', '462': '-    print0(f"final {len(timings)} iters avg: {np.mean(timings)*1000:.3f}ms")', '463': '+                f.write("s:%d trl:%f\\n" % (step, train_loss.item()))', '464': '+', '465': '     print0(f"peak memory consumption: {torch.cuda.max_memory_allocated() // 1024 // 1024} MiB")', '466': '-', '467': '-    # -------------------------------------------------------------------------', '468': '-', '469': '-    if master_process:', '470': '-        log = dict(code=code, args=args.__dict__)', '471': "-        os.makedirs('logs/%s' % run_id, exist_ok=True)", '472': "-        torch.save(log, 'logs/%s/final.pt' % run_id)", '473': ' ', '474': '     # -------------------------------------------------------------------------', '475': '     # clean up nice', '476': '-    destroy_process_group()', '477': '+    dist.destroy_process_group()'}
+  Context Changes: []
+
+
+4) Deterministic syntax evidence:
+procedure_source_python_syntax=valid
+
+Interpretation rules (must follow):
+- The current experiment is defined only by sections (1) Code and (2) Argument/config passed.
+- Section (3) contains prior experiments and diffs relative to the current experiment; do not treat prior outcomes as outcomes of the current experiment.
+- Treat each "Args Changes" entry as a diff signal for comparison only; do not assume extra temporal steps or values not explicitly shown.
+- When describing changes, cite only values explicitly present in section (2) and/or section (3); never introduce unseen intermediate values.
+
+Task:
+- Predict the most likely primary outcome of the current experiment (training behavior, convergence direction, and likely metric trend).
+- For every metric present in the outcomes (e.g. val_loss, train_time, n_steps), describe the expected direction of each metric — not just one.
+- If prior history exists, focus on ALL metrics in the outcomes of previous experiments and describe how each is expected to change.
+- Use concrete evidence from code, args/config changes, and graph history.
+- Focus on expected behavior first; include failure only when there is clear blocking evidence.
+- Treat deterministic syntax evidence as ground truth for `procedure_source`.
+- Do not claim a syntax error in `procedure_source` when deterministic syntax evidence says it is valid.
+- If non-syntax runtime issues are possible (device/dtype/library/data/config), describe them as risks unless clearly deterministic.
+- Do not invent argument/config values; only reference values explicitly present in `args` or graph history.
+- For any failure claim, cite the exact conflicting evidence from inputs.
+- If evidence is mixed or incomplete, prefer a non-failure prediction with calibrated uncertainty and mention key risks.
+- Compare the current experiment with the previous experiments. 
+- If prior history has only one comparable run and matching key config values, treat outcome direction as likely similar unless there is explicit conflicting evidence.
+- Do not set exact numbers for each metric, use ranges (e.g. between 0 and 1)
+- Keep the outcome concise and specific (what will likely happen and why).
+
+Return ONLY valid JSON.
+Do not include markdown, code fences, comments, or extra keys.
+
+JSON schema:
+
+{
+  "outcome": "string",
+  "confidence": 0.0,
+  "reason": "string",
+  "confidence_reason": "string"
+}
+
+Field requirements:
+- outcome: a paragraph describing the most likely experiment result with numbers for the metrics included; include failure only when strongly supported.
+- confidence: float in [0, 1].
+- reason: key evidence supporting the prediction, including risks when relevant.
+- confidence_reason: why the confidence score is appropriate.
+
+Scoring guidance:
+- High confidence when evidence strongly and consistently supports a specific expected result (or a clear deterministic failure mode).
+- Medium confidence when evidence is partial but directionally aligned.
+- Low confidence when outcome is exploratory, ambiguous, weakly supported, or depends on unknown runtime context.
+
+Output exactly one JSON object with these four keys and no additional text.

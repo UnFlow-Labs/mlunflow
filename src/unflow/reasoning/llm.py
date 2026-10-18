@@ -7,6 +7,7 @@ from typing import Any
 import torch
 import transformers
 from llama_cpp import Llama
+from ollama import Client
 
 
 @dataclass(slots=True)
@@ -189,4 +190,16 @@ class TransformersLLM(BaseLLM):
         raw_text = raw_decoded.strip() if isinstance(raw_decoded, str) else str(raw_decoded).strip()
         return raw_text
 
+class OllamaLLM(BaseLLM):
+    def __init__(self, model_name: str):
+        self.model_name = model_name
+        self.client = Client()
 
+    def generate(self, prompt: str, config: LLMConfig | None = None) -> str:
+        response = self.client.chat(
+            model=self.model_name,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = response.message.content.strip() if isinstance(response.message.content, str) else str(response.message.content).strip()
+        return text
+    
